@@ -36,7 +36,7 @@ High-performance torrent streaming backend built with Go. Download torrents and 
 
 1. **Clone and install dependencies**:
 ```bash
-git clone github.com/SaitgalinKhannan/GoFlix
+git clone https://github.com/SaitgalinKhannan/GoFlix.git
 cd GoFlix
 go mod download
 ```
