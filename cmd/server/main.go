@@ -204,7 +204,7 @@ func main() {
 		serverStopCtx()
 	}()
 
-	log.Println("Server started at :8080")
+	log.Println("Server started at :8081")
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("ListenAndServe(): %v", err)
 	}
