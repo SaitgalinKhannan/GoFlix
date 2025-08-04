@@ -3,8 +3,10 @@ package main
 import (
 	"GoFlix/internal/app/torrent"
 	"GoFlix/internal/app/web/handlers"
-	"GoFlix/internal/pkg/httplog"
+	"GoFlix/internal/pkg/filehelpers"
+	"GoFlix/internal/pkg/httphelpers"
 	"context"
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -26,15 +28,111 @@ func main() {
 		}
 	}()
 
+	// Ожидаем сигнал для graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Хранилище состояний торрентов
+	torrentStates := "torrent_states.json"
+	// Проверяем, существует ли файл
+	if _, err := os.Stat(torrentStates); os.IsNotExist(err) {
+		// Файл не существует — создаём его
+		file, createErr := os.Create(torrentStates)
+		if createErr != nil {
+			panic("Не удалось создать файл: " + createErr.Error())
+		}
+
+		defer filehelpers.CloseFile(file)
+
+		// Записываем пустой JSON-объект: {}
+		encoder := json.NewEncoder(file)
+		encodeErr := encoder.Encode(map[string]interface{}{})
+		if encodeErr != nil {
+			panic("Не удалось записать JSON в файл: " + encodeErr.Error())
+		}
+
+		log.Println("Файл", torrentStates, "создан.")
+	} else {
+		log.Println("Файл", torrentStates, "уже существует.")
+	}
+
 	// Хранилище торрентов
 	clientBaseDir := "torrents"
 	// Хранилище метаданных торрентов
 	pieceCompletionDir := "torrent_data"
 	// Инициализируем торрент-клиент
-	torrentClient, err := torrent.NewClient(clientBaseDir, pieceCompletionDir)
+	torrentClient, err := torrent.NewClient(clientBaseDir, pieceCompletionDir, torrentStates)
 	if err != nil {
 		log.Fatal("Failed to init torrent client:", err)
 	}
+
+	eventHandler := torrent.NewEventHandler(torrentClient.StateManager)
+	// Запускаем обработчик событий
+	eventHandler.Start(torrentClient)
+
+	// Периодически проверяем торренты
+	ticker := time.NewTicker(10 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				torrents, err := torrentClient.GetTorrents()
+				if err != nil {
+					log.Println("Failed to get torrents:", err)
+				} else {
+					// Обновляем состояния торрентов
+					for _, t := range torrents {
+						torrentClient.StateManager.UpdateTorrent(&t)
+					}
+				}
+			case <-sigChan:
+				log.Println("Received shutdown signal, stopping torrent monitoring...")
+				return
+			}
+		}
+	}()
+
+	// Обрабатываем очередь конвертации
+	go func() {
+		for {
+			select {
+			case t, ok := <-eventHandler.GetConversionQueue():
+				if !ok {
+					log.Println("Conversion queue closed, stopping conversion worker...")
+					return
+				}
+
+				log.Printf("Starting conversion for torrent: %s", t.InfoHash)
+
+				// Помечаем как конвертируемый
+				if err := torrentClient.StateManager.MarkAsConverting(t.InfoHash); err != nil {
+					log.Printf("Failed to mark torrent as converting: %v", err)
+					continue
+				}
+
+				// Выполняем конвертацию
+				if err := torrent.ConvertTorrentToHls(clientBaseDir, t); err != nil {
+					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
+					// Помечаем как ошибку
+					if markErr := torrentClient.StateManager.MarkAsError(t.InfoHash); markErr != nil {
+						log.Printf("Failed to mark torrent as error: %v", markErr)
+					}
+				} else {
+					// После успешной конвертации
+					if err := torrentClient.StateManager.MarkAsConverted(t.InfoHash); err != nil {
+						log.Printf("Failed to mark torrent as converted: %v", err)
+					} else {
+						log.Printf("Successfully converted torrent: %s", t.Name)
+					}
+				}
+
+			case <-sigChan:
+				log.Println("Received shutdown signal, stopping conversion worker...")
+				return
+			}
+		}
+	}()
 
 	router := chi.NewRouter()
 	// global middleware:
@@ -42,18 +140,19 @@ func main() {
 	router.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
+		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: false,
 		MaxAge:           300, // Maximum value not ignored by any of major browsers
 	}))
 	// Все API-роуты под префиксом /api
 	router.Route("/api", func(api chi.Router) {
-		api.Use(middleware.Timeout(30*time.Second), httplog.ErrorHandler)
+		api.Use(middleware.Timeout(30*time.Second), httphelpers.ErrorHandler)
 		api.Post("/torrents/add", handlers.AddTorrentHandler(torrentClient))
-		api.Get("/torrents/all", handlers.GetTorrentsHandler(torrentClient))
+		api.Get("/torrents", handlers.GetTorrentsHandler(torrentClient))
 		api.Get("/files/tree", handlers.GetFilesTreeHandler())
 		api.Get("/files", handlers.GetFilesHandler())
+		api.Get("/video", handlers.VideoHandler())
 		api.Get("/health", handlers.HealthCheck(torrentClient))
 	})
 	// WebSocket остаётся на корне (без префикса)
@@ -68,9 +167,6 @@ func main() {
 	// Server run context
 	serverCtx, serverStopCtx := context.WithCancel(context.Background())
 
-	// Ожидаем сигнал для graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -100,6 +196,10 @@ func main() {
 		if err := torrentClient.Close(); err != nil {
 			log.Printf("Error closing torrent client: %v", err)
 		}
+
+		// Останавливаем компоненты
+		eventHandler.Stop()
+		torrentClient.StateManager.Stop()
 
 		serverStopCtx()
 	}()

@@ -49,7 +49,7 @@ func HandleWebSocket(torrentClient *torrent.Client) http.HandlerFunc {
 				if err != nil {
 					return
 				}
-				
+
 				// Ключевая проверка: если ошибка записи — клиент отключился
 				if err := conn.WriteJSON(torrents); err != nil {
 					log.Printf("[ws] Client disconnected: %v", err)

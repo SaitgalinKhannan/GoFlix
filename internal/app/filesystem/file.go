@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type File struct {
@@ -17,6 +18,41 @@ type File struct {
 
 func (f *File) AddChild(child File) {
 	f.Children = append(f.Children, child) // но тогда Children должен быть []*File
+}
+
+func BuildSafePath(baseDir, userPath string) (string, error) {
+	// Очищаем путь от множественных слешей и относительных переходов
+	cleanPath := filepath.Clean(userPath)
+
+	// Убираем ведущий слеш если есть
+	if strings.HasPrefix(cleanPath, "/") {
+		cleanPath = strings.TrimPrefix(cleanPath, "/")
+	}
+
+	// Строим полный путь
+	fullPath := cleanPath
+
+	if !strings.HasPrefix(fullPath, baseDir) {
+		fullPath = filepath.Join(baseDir, cleanPath)
+	}
+
+	// Получаем абсолютные пути для проверки
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return "", err
+	}
+
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return "", err
+	}
+
+	// Проверяем, что результирующий путь находится внутри базовой директории
+	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
+		return "", fmt.Errorf("path traversal detected")
+	}
+
+	return fullPath, nil
 }
 
 func buildTree(rootPath string) (*File, error) {
@@ -64,7 +100,7 @@ func buildTree(rootPath string) (*File, error) {
 	return file, nil
 }
 
-func getFilesFromDir(rootPath string) (*File, error) {
+func getDir(rootPath string) (*File, error) {
 	dir, err := os.ReadDir(rootPath)
 	if err != nil {
 		return nil, err
@@ -106,31 +142,31 @@ func getFilesFromDir(rootPath string) (*File, error) {
 }
 
 // GetFilesTree return files tree without root dir
-func GetFilesTree() ([]File, error) {
+func GetFilesTree() (*[]File, error) {
 	file, err := buildTree("torrents")
 	if err != nil {
 		log.Println(err)
-		return nil, fmt.Errorf("[file] %s", err)
+		return nil, fmt.Errorf("[filehelpers] %s", err)
 	}
 
 	if file.Children != nil {
-		return file.Children, nil
+		return &file.Children, nil
 	} else {
-		return make([]File, 0), nil
+		return nil, nil
 	}
 }
 
 // GetFiles return files without root dir
-func GetFiles(rootPath string) ([]File, error) {
-	file, err := getFilesFromDir(rootPath)
+func GetFiles(rootPath string) (*[]File, error) {
+	file, err := getDir(rootPath)
 	if err != nil {
 		log.Println(err)
-		return nil, fmt.Errorf("[file] %s", err)
+		return nil, fmt.Errorf("[filehelpers] %s", err)
 	}
 
 	if file.Children != nil {
-		return file.Children, nil
+		return &file.Children, nil
 	} else {
-		return make([]File, 0), nil
+		return nil, nil
 	}
 }

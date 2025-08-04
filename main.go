@@ -1,89 +1,63 @@
 package main
 
 import (
+	"GoFlix/internal/app/media"
+	"GoFlix/internal/pkg/filehelpers"
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
-type File struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	IsDir    bool   `json:"isDir"`
-	Size     int64  `json:"size,omitempty"`
-	Children []File `json:"children,omitempty"`
-}
-
-func (f *File) AddChild(child *File) {
-	f.Children = append(f.Children, *child)
-}
-
-func main() {
-	file, err := buildTree("torrents")
+func ConvertTorrentToHls(baseDir string, torrentName string) error {
+	torrentPath := filepath.Join(baseDir, torrentName)
+	abs, err := filepath.Abs(torrentPath)
 	if err != nil {
-		log.Println(err)
+		return err
 	}
 
-	printTree(*file, 0)
-}
-
-func buildTree(rootPath string) (*File, error) {
-	dir, err := os.ReadDir(rootPath)
+	stat, err := os.Stat(abs)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	// Создаем корневой файл, потом к его children записываем остальные папки и файлы
-	file := &File{
-		Name:     filepath.Base(rootPath),
-		Path:     rootPath,
-		IsDir:    true,
-		Size:     0,
-		Children: nil,
-	}
-
-	if len(dir) == 0 {
-		return file, nil
-	}
-
-	var children []File
-
-	for _, entry := range dir {
-		if entry.IsDir() {
-			tree, err := buildTree(filepath.Join(rootPath, entry.Name()))
+	if stat.IsDir() {
+		// Обрабатываем ошибку от filepath.Walk
+		return filepath.Walk(abs, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
-				return nil, err
+				return err
 			}
 
-			children = append(children, *tree)
-		} else {
-			info, _ := entry.Info()
-			children = append(children, File{
-				Name:     entry.Name(),
-				Path:     filepath.Join(rootPath, entry.Name()),
-				IsDir:    false,
-				Size:     info.Size(),
-				Children: nil,
-			})
+			// Пропускаем директории, обрабатываем только файлы
+			if info.IsDir() {
+				return nil
+			}
+
+			// Проверяем, является ли файл видео
+			if !filehelpers.IsVideoFile(path) {
+				return nil
+			}
+
+			// Передаем полный путь, а не только имя файла
+			err = media.CopyToHls(path)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		})
+	} else {
+		err = media.CopyToHls(abs)
+		if err != nil {
+			return err
 		}
 	}
 
-	file.Children = children
-
-	return file, nil
+	return nil
 }
 
-func printTree(file File, level int) {
-	// Символ для директории или файла
-	prefix := "📁 "
-	if !file.IsDir {
-		prefix = "📄 "
-	}
-
-	log.Printf("%s%s%s\n", strings.Repeat(" ", level*4), prefix, file.Name)
-
-	for _, child := range file.Children {
-		printTree(child, level+1)
+func main() {
+	clientBaseDir := "torrents"
+	if err := ConvertTorrentToHls(clientBaseDir, "Takopii no Genzai - AniLiberty [WEBRip 1080p HEVC]"); err != nil {
+		log.Printf("Failed to convert torrent %s: %v", "Takopii no Genzai - AniLiberty [WEBRip 1080p HEVC]", err)
 	}
 }

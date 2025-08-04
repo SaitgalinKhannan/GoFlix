@@ -20,10 +20,11 @@ import (
 var _ io.Closer = (*Client)(nil)
 
 type Client struct {
-	tClient *torrent.Client
+	tClient      *torrent.Client
+	StateManager *StateManager
 }
 
-func NewClient(clientBaseDir string, pieceCompletionDir string) (*Client, error) {
+func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string) (*Client, error) {
 	config := torrent.NewDefaultClientConfig()
 
 	err := os.MkdirAll(clientBaseDir, 0o700)
@@ -55,7 +56,8 @@ func NewClient(clientBaseDir string, pieceCompletionDir string) (*Client, error)
 	}
 
 	return &Client{
-		tClient: tClient,
+		tClient:      tClient,
+		StateManager: NewTorrentStateManager(stateFile),
 	}, nil
 }
 
@@ -98,26 +100,40 @@ func (c *Client) GetTorrent(t *torrent.Torrent) (*Torrent, error) {
 		magnet, err := metaInfo.MagnetV2()
 
 		if err != nil {
-			return nil, errors.New("torrent's magnet not found")
+			return nil, fmt.Errorf("[client] torrent's magnet not found:%v\n", err)
 		}
 
+		infoHash := t.InfoHash().String()
 		percent := getPercent(t.BytesCompleted(), t.Length())
 		newTorrent := Torrent{
-			InfoHash:          t.InfoHash().String(),
+			InfoHash:          infoHash,
 			Name:              t.Name(),
 			Magnet:            magnet.String(),
 			Size:              t.Length(),
 			Done:              int(percent) == 100,
 			DownloadedPercent: percent,
+			State:             StateDownloading,
+			ConvertingState:   StateNotConverted,
+			LastChecked:       time.Now(),
+		}
+
+		// get torrent state
+		oldTorrent, exist := c.StateManager.states[infoHash]
+		if exist && oldTorrent != nil && newTorrent.Done {
+			newTorrent.State = oldTorrent.State
+			newTorrent.ConvertingState = oldTorrent.ConvertingState
+			newTorrent.CompletedAt = oldTorrent.CompletedAt
+			newTorrent.ConvertingQueuedAt = oldTorrent.ConvertingQueuedAt
+			newTorrent.ConvertedAt = oldTorrent.ConvertedAt
 		}
 
 		return &newTorrent, nil
 	}
 
-	return nil, errors.New("torrent not found")
+	return nil, errors.New("[client] torrent not found")
 }
 
-func (c *Client) GetTorrents() (*[]Torrent, error) {
+func (c *Client) GetTorrents() ([]Torrent, error) {
 	ts := c.tClient.Torrents()
 	var torrents []Torrent
 
@@ -135,7 +151,7 @@ func (c *Client) GetTorrents() (*[]Torrent, error) {
 		}
 	}
 
-	return &torrents, nil
+	return torrents, nil
 }
 
 // Close Закрывает торрент-клиент
