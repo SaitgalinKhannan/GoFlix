@@ -160,7 +160,7 @@ func main() {
 
 	// Создаем HTTP-сервер
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":8081",
 		Handler: router,
 	}
 
