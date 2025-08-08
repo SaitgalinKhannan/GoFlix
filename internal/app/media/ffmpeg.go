@@ -24,12 +24,13 @@ func CopyToHls(path string) error {
 		"-c:a", "copy",
 		"-map", "0:v",
 		"-map", "0:a",
+		"-movflags", "+faststart",
 		"-f", "hls",
-		"-hls_time", "10",
+		"-hls_segment_type", "fmp4",
+		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
-		"-hls_segment_type", "mpegts",
 		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.ts"),
+		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.m4s"),
 		filePathWithoutExt + ".m3u8",
 	}
 
@@ -51,19 +52,20 @@ func ConvertToHls(path string) error {
 
 	args := []string{
 		"-i", path,
-		"-c:v", "libx264", //-preset medium -crf 18
+		"-c:v", "libx264",
 		"-preset", "superfast",
+		"-movflags", "+faststart",
 		"-crf", "18",
-		"-c:a", "aac", // Перекодируем аудио в AAC
-		"-b:a", "128k", // Битрейт аудио
+		"-c:a", "aac",
+		"-b:a", "128k",
 		"-map", "0:v",
 		"-map", "0:a",
 		"-f", "hls",
-		"-hls_time", "10",
+		"-hls_segment_type", "fmp4",
+		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
-		"-hls_segment_type", "mpegts",
 		"-hls_flags", "independent_segments",
-		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.ts"),
+		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.m4s"),
 		filePathWithoutExt + ".m3u8",
 	}
 
@@ -105,9 +107,9 @@ func ConvertToHlsWithAdaptiveBitrateSingle(path string) error {
 		"-c:v", "libx264",
 		"-preset", "fast",
 		"-f", "hls",
-		"-hls_time", "10",
+		"-hls_segment_type", "fmp4",
+		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
-		"-hls_segment_type", "mpegts",
 		"-hls_flags", "independent_segments",
 	}
 
@@ -118,7 +120,7 @@ func ConvertToHlsWithAdaptiveBitrateSingle(path string) error {
 			"-map", "0:a",
 			fmt.Sprintf("-b:v:%d", i), q.bitrate,
 			fmt.Sprintf("-s:v:%d", i), q.resolution,
-			fmt.Sprintf("-hls_segment_filename:v:%d", i), filepath.Join(filePathWithoutExt, q.filename+"_%03d.ts"),
+			fmt.Sprintf("-hls_segment_filename:v:%d", i), filepath.Join(filePathWithoutExt, q.filename+"_%03d.m4s"),
 		)
 	}
 
