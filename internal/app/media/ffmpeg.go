@@ -65,6 +65,7 @@ func ConvertToHls(path string) error {
 		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
 		"-hls_flags", "independent_segments",
+		"-hls_fmp4_init_filename", filepath.Join(filePathWithoutExt, "init.mp4"),
 		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.m4s"),
 		filePathWithoutExt + ".m3u8",
 	}
