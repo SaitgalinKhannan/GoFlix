@@ -14,14 +14,12 @@ type Event struct {
 
 // EventHandler обработчик событий
 type EventHandler struct {
-	stateManager    *StateManager
-	conversionQueue chan *Torrent // Очередь на конвертацию
+	stateManager *StateManager
 }
 
 func NewEventHandler(sm *StateManager) *EventHandler {
 	return &EventHandler{
-		stateManager:    sm,
-		conversionQueue: make(chan *Torrent, 100),
+		stateManager: sm,
 	}
 }
 
@@ -57,7 +55,7 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 			} else {
 				// Добавляем в очередь конвертации
 				select {
-				case eh.conversionQueue <- event.Torrent:
+				case eh.stateManager.conversionQueue <- event.Torrent:
 					log.Printf("Added torrent to conversion queue: %s", event.Torrent.Name)
 				default:
 					log.Printf("Conversion queue is full, torrent: %s", event.Torrent.Name)
@@ -73,6 +71,12 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 	case "conversion_completed":
 		log.Printf("Torrent conversion completed: %s", event.Torrent.Name)
 
+	case "downloading_paused":
+		log.Printf("Torrent downloading paused: %s", event.Torrent.Name)
+
+	case "downloading_resumed":
+		log.Printf("Torrent downloading resumed: %s", event.Torrent.Name)
+
 	default:
 		log.Printf("Unknown event type: %s", event.Type)
 	}
@@ -80,10 +84,10 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 
 // GetConversionQueue возвращает канал очереди конвертации
 func (eh *EventHandler) GetConversionQueue() <-chan *Torrent {
-	return eh.conversionQueue
+	return eh.stateManager.conversionQueue
 }
 
 // Stop останавливает обработчик событий
 func (eh *EventHandler) Stop() {
-	close(eh.conversionQueue)
+	close(eh.stateManager.conversionQueue)
 }

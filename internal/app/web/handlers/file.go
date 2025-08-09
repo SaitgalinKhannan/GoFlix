@@ -97,6 +97,8 @@ func VideoHandler() http.HandlerFunc {
 			contentType = "video/mp2t"
 		case ".mp4":
 			contentType = "video/mp4"
+		case ".m4s":
+			contentType = "video/iso.segment"
 		default:
 			contentType = "application/octet-stream"
 		}

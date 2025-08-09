@@ -50,12 +50,33 @@ func ConvertToHls(path string) error {
 		return fmt.Errorf("failed to create directory %s: %w", filePathWithoutExt, err)
 	}
 
+	fmt.Printf("filePathWithoutExt: %s\n", filePathWithoutExt)
+	fmt.Printf("init.mp4: %s\n", filepath.Join(filePathWithoutExt, "init.mp4"))
+
 	args := []string{
 		"-i", path,
 		"-c:v", "libx264",
 		"-preset", "superfast",
 		"-movflags", "+faststart",
-		"-crf", "18",
+		"-crf", "30",
+		"-c:a", "aac",
+		"-b:a", "128k",
+		"-map", "0:v",
+		"-map", "0:a",
+		"-f", "hls",
+		"-hls_time", "4",
+		"-hls_playlist_type", "vod",
+		"-hls_flags", "independent_segments",
+		"-hls_segment_filename", "segment_%03d.ts",
+		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
+	}
+
+	/*args := []string{
+		"-i", path,
+		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-movflags", "+faststart",
+		"-crf", "30",
 		"-c:a", "aac",
 		"-b:a", "128k",
 		"-map", "0:v",
@@ -65,17 +86,20 @@ func ConvertToHls(path string) error {
 		"-hls_time", "4",
 		"-hls_playlist_type", "vod",
 		"-hls_flags", "independent_segments",
-		"-hls_fmp4_init_filename", filepath.Join(filePathWithoutExt, "init.mp4"),
-		"-hls_segment_filename", filepath.Join(filePathWithoutExt, "segment_%03d.m4s"),
-		filePathWithoutExt + ".m3u8",
-	}
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_segment_filename", "segment_%03d.m4s",
+		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
+	}*/
 
 	cmd := exec.Command("ffmpeg", args...)
+	cmd.Dir = filePathWithoutExt // Устанавливаем рабочую директорию для команды
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("[ffmpeg] Failed to convert %s to hls: %s\n", filePathWithoutExt, err)
 	}
+
 	return nil
 }
 

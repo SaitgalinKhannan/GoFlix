@@ -3,7 +3,6 @@ package torrent
 import (
 	"GoFlix/internal/app/media"
 	"GoFlix/internal/pkg/filehelpers"
-	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -26,8 +25,6 @@ func ConvertTorrentToHls(baseDir string, torrent *Torrent) error {
 	if err != nil {
 		return err
 	}
-
-	fmt.Println(abs)
 
 	if stat.IsDir() {
 		return filepath.Walk(abs, func(path string, info os.FileInfo, err error) error {

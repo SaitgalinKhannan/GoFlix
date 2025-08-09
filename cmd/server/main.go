@@ -71,20 +71,15 @@ func main() {
 	eventHandler.Start(torrentClient)
 
 	// Периодически проверяем торренты
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	go func() {
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				torrents, err := torrentClient.GetTorrents()
-				if err != nil {
-					log.Println("Failed to get torrents:", err)
-				} else {
-					// Обновляем состояния торрентов
-					for _, t := range torrents {
-						torrentClient.StateManager.UpdateTorrent(&t)
-					}
+				torrents := torrentClient.GetTorrents()
+				for _, t := range torrents {
+					torrentClient.StateManager.UpdateTorrent(&t)
 				}
 			case <-sigChan:
 				log.Println("Received shutdown signal, stopping torrent monitoring...")
@@ -145,17 +140,22 @@ func main() {
 		AllowCredentials: false,
 		MaxAge:           300, // Maximum value not ignored by any of major browsers
 	}))
-	// Все API-роуты под префиксом /api
 	router.Route("/api", func(api chi.Router) {
 		api.Use(middleware.Timeout(30*time.Second), httphelpers.ErrorHandler)
-		api.Post("/torrents/add", handlers.AddTorrentHandler(torrentClient))
-		api.Get("/torrents", handlers.GetTorrentsHandler(torrentClient))
+		api.Route("/torrents", func(r chi.Router) {
+			r.Get("/", handlers.GetTorrentsHandler(torrentClient))
+			r.Post("/", handlers.AddTorrentHandler(torrentClient))
+			r.Get("/{hash}/pause", handlers.PauseTorrentHandler(torrentClient))
+			r.Get("/{hash}/resume", handlers.ResumeTorrentHandler(torrentClient))
+			r.Get("/{hash}", handlers.GetTorrentHandler(torrentClient))
+			r.Delete("/{hash}", handlers.DeleteTorrentHandler(torrentClient, clientBaseDir))
+			r.Post("/{hash}/convert", handlers.ConvertTorrentHandler(torrentClient))
+		})
 		api.Get("/files/tree", handlers.GetFilesTreeHandler())
 		api.Get("/files", handlers.GetFilesHandler())
 		api.Get("/video", handlers.VideoHandler())
 		api.Get("/health", handlers.HealthCheck(torrentClient))
 	})
-	// WebSocket остаётся на корне (без префикса)
 	router.Get("/ws", handlers.HandleWebSocket(torrentClient))
 
 	// Создаем HTTP-сервер

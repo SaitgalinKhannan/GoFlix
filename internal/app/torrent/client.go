@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/anacrolix/torrent/storage"
 	"io"
 	"log"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/anacrolix/torrent/storage"
 )
 
 import (
@@ -61,15 +62,15 @@ func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string
 	}, nil
 }
 
-// Add Добавляем торрент через magnet-ссылку или .torrent файл
-func (c *Client) Add(magnetOrFilePath string) (string, error) {
+// Add Добавляем торрент через magnet-ссылку
+func (c *Client) Add(magnet string) (string, error) {
 	var t *torrent.Torrent
 	var err error
 
-	if strings.HasPrefix(magnetOrFilePath, "magnet:") {
-		t, err = c.tClient.AddMagnet(magnetOrFilePath)
+	if strings.HasPrefix(magnet, "magnet:") {
+		t, err = c.tClient.AddMagnet(magnet)
 	} else {
-		mi, err := metainfo.LoadFromFile(magnetOrFilePath)
+		mi, err := metainfo.LoadFromFile(magnet)
 		if err != nil {
 			return "", err
 		}
@@ -81,7 +82,7 @@ func (c *Client) Add(magnetOrFilePath string) (string, error) {
 	}
 
 	if t == nil {
-		return "", fmt.Errorf("failed to add torrent: %s", magnetOrFilePath)
+		return "", fmt.Errorf("failed to add torrent: %s", magnet)
 	}
 
 	// Ждем метаданные (критично для magnet-ссылок)
@@ -93,8 +94,8 @@ func (c *Client) Add(magnetOrFilePath string) (string, error) {
 	return infoHash, nil
 }
 
-// GetTorrent convert *torrent.Torrent to Torrent
-func (c *Client) GetTorrent(t *torrent.Torrent) (*Torrent, error) {
+// GetTorrentInfo convert *torrent.Torrent to Torrent
+func (c *Client) GetTorrentInfo(t *torrent.Torrent) (*Torrent, error) {
 	if t != nil {
 		metaInfo := t.Metainfo()
 		magnet, err := metaInfo.MagnetV2()
@@ -133,25 +134,140 @@ func (c *Client) GetTorrent(t *torrent.Torrent) (*Torrent, error) {
 	return nil, errors.New("[client] torrent not found")
 }
 
-func (c *Client) GetTorrents() ([]Torrent, error) {
-	ts := c.tClient.Torrents()
-	var torrents []Torrent
+// GetTorrent return torrent by infoHash
+func (c *Client) GetTorrent(infoHash string) (*Torrent, error) {
+	torrents := c.tClient.Torrents()
 
-	if ts != nil {
-		for _, t := range ts {
-			newTorrent, err := c.GetTorrent(t)
+	for _, t := range torrents {
+		if t.InfoHash().String() == infoHash {
+			convertedTorrent, err := c.GetTorrentInfo(t)
 
 			if err != nil {
-				log.Println(err)
+				return nil, err
 			}
 
-			if newTorrent != nil {
-				torrents = append(torrents, *newTorrent)
+			if convertedTorrent != nil {
+				return convertedTorrent, nil
 			}
 		}
 	}
 
+	return nil, nil
+}
+
+/*func (c *Client) GetTorrents() ([]Torrent, error) {
+	ts := c.tClient.Torrents()
+	torrents := make([]Torrent, 0, len(ts))
+
+	for _, t := range ts {
+		newTorrent, err := c.GetTorrentInfo(t)
+
+		if err != nil {
+			log.Println(err)
+		}
+
+		if newTorrent != nil {
+			torrents = append(torrents, *newTorrent)
+		}
+	}
+
 	return torrents, nil
+}*/
+
+func (c *Client) GetTorrents() []Torrent {
+	ts := c.tClient.Torrents()
+	// tsFromState is a map where the key is the InfoHash. This is very useful.
+	tsFromState := c.StateManager.GetAllTorrents()
+
+	// Pre-allocate slice capacity for better performance, assuming most torrents will be active.
+	torrents := make([]Torrent, 0, len(ts)+len(tsFromState))
+
+	// First, add all the currently active torrents from the client.
+	for _, t := range ts {
+		newTorrent, err := c.GetTorrentInfo(t)
+		if err != nil {
+			log.Printf("[client] error getting torrent info: %v", err)
+			continue // Skip to the next torrent
+		}
+		if newTorrent != nil {
+			torrents = append(torrents, *newTorrent)
+			// Since we've found this torrent, remove it from the state map.
+			// This way, tsFromState will only contain torrents that are not currently active.
+			delete(tsFromState, newTorrent.InfoHash)
+		}
+	}
+
+	// Now, add the remaining torrents from the state that were not in the active list.
+	// The loop will iterate over what's left in the map.
+	for _, stateTorrent := range tsFromState {
+		torrents = append(torrents, *stateTorrent)
+	}
+
+	return torrents
+}
+
+func (c *Client) PauseTorrent(infoHash string) error {
+	torrents := c.tClient.Torrents()
+
+	for _, t := range torrents {
+		if t.InfoHash().String() == infoHash {
+			t.Drop()
+			return c.StateManager.MarkAsPaused(infoHash)
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) ResumeTorrent(infoHash string) error {
+	torrents := c.GetTorrents()
+
+	for _, t := range torrents {
+		if t.InfoHash == infoHash {
+			if _, err := c.Add(t.Magnet); err != nil {
+				return fmt.Errorf("[client] Failed to add torrent to client: %v\n", err)
+			}
+			return c.StateManager.MarkAsResumed(infoHash)
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) DeleteTorrent(infoHash string) error {
+	torrents := c.tClient.Torrents()
+
+	for _, t := range torrents {
+		if t.InfoHash().String() == infoHash {
+			t.Drop()
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) ConvertTorrent(infoHash string) error {
+	torrents := c.GetTorrents()
+
+	for _, t := range torrents {
+		if t.InfoHash == infoHash {
+			if err := c.StateManager.MarkAsQueued(t.InfoHash); err != nil {
+				return fmt.Errorf("error marking torrent as queued: %v", err)
+			} else {
+				// Добавляем в очередь конвертации
+				select {
+				case c.StateManager.conversionQueue <- &t:
+					log.Printf("Added torrent to conversion queue: %s", t.Name)
+				default:
+					log.Printf("Conversion queue is full, torrent: %s", t.Name)
+					return fmt.Errorf("torrent conversion queue is full")
+				}
+			}
+			break
+		}
+	}
+
+	return nil
 }
 
 // Close Закрывает торрент-клиент

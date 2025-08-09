@@ -25,17 +25,21 @@ type StateManager struct {
 	saveInProgress sync.Mutex
 	stopChan       chan struct{}
 	wg             sync.WaitGroup
+
+	// Очередь на конвертацию
+	conversionQueue chan *Torrent
 }
 
 // NewTorrentStateManager создает новый менеджер состояний
 func NewTorrentStateManager(stateFile string) *StateManager {
 	sm := &StateManager{
-		states:       make(map[string]*Torrent),
-		stateFile:    stateFile,
-		eventChannel: make(chan Event, 100),
-		saveChannel:  make(chan struct{}, 1),
-		batchUpdates: make(chan *Torrent, 100),
-		stopChan:     make(chan struct{}),
+		states:          make(map[string]*Torrent),
+		stateFile:       stateFile,
+		eventChannel:    make(chan Event, 100),
+		saveChannel:     make(chan struct{}, 1),
+		batchUpdates:    make(chan *Torrent, 100),
+		stopChan:        make(chan struct{}),
+		conversionQueue: make(chan *Torrent, 100),
 	}
 
 	// Загружаем существующие состояния
@@ -231,6 +235,7 @@ func (sm *StateManager) GetAllTorrents() map[string]*Torrent {
 	for k, v := range sm.states {
 		result[k] = v
 	}
+
 	return result
 }
 
@@ -243,6 +248,88 @@ func (sm *StateManager) UpdateTorrent(torrent *Torrent) {
 	default:
 		log.Println("Batch updates channel is full")
 	}
+}
+
+// MarkAsPaused помечает торрент как приостановленный
+func (sm *StateManager) MarkAsPaused(infoHash string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	torrent, exists := sm.states[infoHash]
+	if !exists {
+		return fmt.Errorf("torrent %s not found", infoHash)
+	}
+	if torrent.State == StatePaused {
+		return nil
+	}
+
+	now := time.Now()
+	torrent.State = StatePaused
+	torrent.LastChecked = now
+
+	// Сохраняем состояние
+	select {
+	case sm.saveChannel <- struct{}{}:
+	default:
+	}
+
+	// Отправляем событие
+	event := Event{
+		Type:      "downloading_paused",
+		Torrent:   torrent,
+		Timestamp: now,
+	}
+
+	select {
+	case sm.eventChannel <- event:
+	default:
+		log.Println("Event channel is full, dropping event")
+	}
+
+	return nil
+}
+
+// MarkAsResumed помечает торрент как resumed
+func (sm *StateManager) MarkAsResumed(infoHash string) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	torrent, exists := sm.states[infoHash]
+	if !exists {
+		return fmt.Errorf("torrent %s not found", infoHash)
+	}
+	if torrent.State == StateDownloading {
+		return nil
+	}
+
+	now := time.Now()
+	if torrent.Done {
+		torrent.State = StateCompleted
+	} else {
+		torrent.State = StateDownloading
+	}
+	torrent.LastChecked = now
+
+	// Сохраняем состояние
+	select {
+	case sm.saveChannel <- struct{}{}:
+	default:
+	}
+
+	// Отправляем событие
+	event := Event{
+		Type:      "downloading_resumed",
+		Torrent:   torrent,
+		Timestamp: now,
+	}
+
+	select {
+	case sm.eventChannel <- event:
+	default:
+		log.Println("Event channel is full, dropping event")
+	}
+
+	return nil
 }
 
 // MarkAsQueued помечает торрент как добавленный в очередь на конвертацию
@@ -280,7 +367,7 @@ func (sm *StateManager) MarkAsQueued(infoHash string) error {
 		Torrent:   torrent,
 		Timestamp: now,
 	}
-
+	fmt.Println(event)
 	select {
 	case sm.eventChannel <- event:
 	default:

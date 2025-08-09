@@ -2,11 +2,12 @@ package handlers
 
 import (
 	"GoFlix/internal/app/torrent"
-	"github.com/gorilla/websocket"
 	"log"
 	"net/http"
 	"runtime/debug"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
@@ -32,23 +33,13 @@ func HandleWebSocket(torrentClient *torrent.Client) http.HandlerFunc {
 			}
 		}()
 
-		if _, err := torrentClient.GetTorrents(); err != nil {
-			if err := conn.WriteJSON(map[string]string{"error": "invalid torrent"}); err != nil {
-				log.Printf("[ws] WriteJSON failed: %v", err)
-			}
-			return
-		}
-
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				torrents, err := torrentClient.GetTorrents()
-				if err != nil {
-					return
-				}
+				torrents := torrentClient.GetTorrents()
 
 				// Ключевая проверка: если ошибка записи — клиент отключился
 				if err := conn.WriteJSON(torrents); err != nil {
