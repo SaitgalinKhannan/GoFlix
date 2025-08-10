@@ -49,7 +49,7 @@ func GenerateFFMpegArgs(openAIClient *openai.Client, path string) ([]string, err
 	// 1. Получаем информацию о файле
 	info, err := GetVideoInfo(path)
 	if err != nil {
-		return nil, fmt.Errorf("[ffmpegArgs] failed to get video info: %w", err)
+		return nil, fmt.Errorf("[ffmpegArgs] failed to get video info path%s: %w", path, err)
 	}
 	// 2. Генерируем промт на основе данных о видео
 	prompt := GenerateAIPrompt(info)
