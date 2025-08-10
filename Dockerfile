@@ -10,6 +10,10 @@ RUN CGO_ENABLED=0 go build -o app -ldflags "-s -w" ./cmd/server
 
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates
+# --- ИЗМЕНЕНИЯ НАЧИНАЮТСЯ ЗДЕСЬ ---
+# Установка FFmpeg, чтобы ffprobe был доступен внутри контейнера
+RUN apk add --no-cache ffmpeg
+# --- ИЗМЕНЕНИЯ ЗАКАНЧИВАЮТСЯ ЗДЕСЬ ---
 WORKDIR /app
 COPY --from=builder /app/app .
 RUN mkdir -p /app/data
