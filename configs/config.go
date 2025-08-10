@@ -43,13 +43,13 @@ func LoadConfig() (*Config, error) {
 		cfg.Port = "8081"
 	}
 	if cfg.TorrentsStatesFile == "" {
-		cfg.TorrentsStatesFile = "data/torrent_states.json"
+		cfg.TorrentsStatesFile = "/app/data/torrent_states.json"
 	}
 	if cfg.TorrentsDir == "" {
-		cfg.TorrentsDir = "data/torrents"
+		cfg.TorrentsDir = "/app/data/torrents"
 	}
 	if cfg.PieceCompletionDir == "" {
-		cfg.PieceCompletionDir = "data/torrent_data"
+		cfg.PieceCompletionDir = "/app/data/torrent_data"
 	}
 	// Для OpenAI_URL и OpenAI_KEY лучше не задавать дефолты или требовать их
 	// Если они критически важны
