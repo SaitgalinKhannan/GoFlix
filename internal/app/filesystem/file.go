@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"GoFlix/configs"
 	"fmt"
 	"log"
 	"os"
@@ -142,8 +143,8 @@ func getDir(rootPath string) (*File, error) {
 }
 
 // GetFilesTree return files tree without root dir
-func GetFilesTree() (*[]File, error) {
-	file, err := buildTree("torrents")
+func GetFilesTree(cfg *configs.Config) (*[]File, error) {
+	file, err := buildTree(cfg.TorrentsDir)
 	if err != nil {
 		log.Println(err)
 		return nil, fmt.Errorf("[filehelpers] %s", err)
