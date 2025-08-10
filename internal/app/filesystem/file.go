@@ -36,8 +36,16 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	fmt.Printf("fullPath: %s\n", fullPath)
 
 	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(strings.TrimPrefix(fullPath, "/"), baseDir)) {
+		fmt.Printf("strings.HasPrefix(fullPath, baseDir): %t\n", strings.HasPrefix(fullPath, baseDir))
+		fmt.Printf("---fullPath: %s\n", fullPath)
+		fmt.Printf("---baseDir: %s\n", baseDir)
+
+		fmt.Printf("strings.HasPrefix(strings.TrimPrefix(fullPath, /), baseDir): %t\n", strings.HasPrefix(strings.TrimPrefix(fullPath, "/"), baseDir))
+		fmt.Printf("---fullPath: %s\n", strings.TrimPrefix(fullPath, "/"))
+		fmt.Printf("---baseDir: %s\n", baseDir)
+
 		fullPath = filepath.Join(baseDir, cleanPath)
-		fmt.Printf("fullPath: %s\n", fullPath)
+		fmt.Printf("new fullPath: %s\n", fullPath)
 	}
 
 	// Получаем абсолютные пути для проверки
