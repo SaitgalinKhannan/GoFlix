@@ -35,7 +35,7 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	fullPath := cleanPath
 	fmt.Printf("fullPath: %s\n", fullPath)
 
-	if !strings.HasPrefix(fullPath, baseDir) {
+	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(strings.TrimPrefix(fullPath, "/"), baseDir)) {
 		fullPath = filepath.Join(baseDir, cleanPath)
 		fmt.Printf("fullPath: %s\n", fullPath)
 	}
