@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+configs/.env
+__pycache__
+*.pyc
+
+# Go specific
+*.test
+*.prof
+vendor/
