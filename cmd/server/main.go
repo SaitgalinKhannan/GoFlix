@@ -1,6 +1,7 @@
 package main
 
 import (
+	"GoFlix/configs"
 	"GoFlix/internal/app/torrent"
 	"GoFlix/internal/app/web/handlers"
 	"GoFlix/internal/pkg/filehelpers"
@@ -8,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -31,17 +33,30 @@ func main() {
 		}
 	}()
 
+	cfg, err := configs.LoadConfig()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
+	fmt.Printf("Config loaded:\n")
+	fmt.Printf("  Port: %s\n", cfg.Port)
+	fmt.Printf("  TorrentsStatesFile: %s\n", cfg.TorrentsStatesFile)
+	fmt.Printf("  TorrentsDir: %s\n", cfg.TorrentsDir)
+	fmt.Printf("  PieceCompletionDir: %s\n", cfg.PieceCompletionDir)
+	fmt.Printf("  OpenAIURL: %s\n", cfg.OpenAIURL)
+	fmt.Printf("  OpenAIKey: %s (first chars)\n", cfg.OpenAIKey[:5])
+
 	// Ожидаем сигнал для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	openAIClient := openai.NewClient(
-		option.WithAPIKey("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"),
-		option.WithBaseURL("https://openrouter.ai/api/v1"),
+		option.WithAPIKey(cfg.OpenAIKey),
+		option.WithBaseURL(cfg.OpenAIURL),
 	)
 
 	// Хранилище состояний торрентов
-	torrentStates := "torrent_states.json"
+	torrentStates := cfg.TorrentsStatesFile
 	// Проверяем, существует ли файл
 	if _, err := os.Stat(torrentStates); os.IsNotExist(err) {
 		// Файл не существует — создаём его
@@ -65,9 +80,9 @@ func main() {
 	}
 
 	// Хранилище торрентов
-	clientBaseDir := "torrents"
+	clientBaseDir := cfg.TorrentsDir
 	// Хранилище метаданных торрентов
-	pieceCompletionDir := "torrent_data"
+	pieceCompletionDir := cfg.PieceCompletionDir
 	// Инициализируем торрент-клиент
 	torrentClient, err := torrent.NewClient(clientBaseDir, pieceCompletionDir, torrentStates)
 	if err != nil {
@@ -115,7 +130,7 @@ func main() {
 				}
 
 				// Выполняем конвертацию
-				if err := torrent.ConvertTorrentToHls(&openAIClient, clientBaseDir, t); err != nil {
+				if err := torrent.ConvertTorrentToHls(&openAIClient, cfg, t); err != nil {
 					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
 					// Помечаем как ошибку
 					if markErr := torrentClient.StateManager.MarkAsError(t.InfoHash); markErr != nil {
@@ -156,7 +171,7 @@ func main() {
 			r.Get("/{hash}/pause", handlers.PauseTorrentHandler(torrentClient))
 			r.Get("/{hash}/resume", handlers.ResumeTorrentHandler(torrentClient))
 			r.Get("/{hash}", handlers.GetTorrentHandler(torrentClient))
-			r.Delete("/{hash}", handlers.DeleteTorrentHandler(torrentClient, clientBaseDir))
+			r.Delete("/{hash}", handlers.DeleteTorrentHandler(torrentClient))
 			r.Post("/{hash}/convert", handlers.ConvertTorrentHandler(torrentClient))
 		})
 		api.Get("/files/tree", handlers.GetFilesTreeHandler())

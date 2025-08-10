@@ -114,7 +114,7 @@ func ResumeTorrentHandler(client *torrent.Client) http.HandlerFunc {
 }
 
 // DeleteTorrentHandler обрабатывает DELETE /{hash}
-func DeleteTorrentHandler(client *torrent.Client, rootDir string) http.HandlerFunc {
+func DeleteTorrentHandler(client *torrent.Client) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {

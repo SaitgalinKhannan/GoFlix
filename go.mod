@@ -8,6 +8,7 @@ require (
 	github.com/go-chi/cors v1.2.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/invopop/jsonschema v0.13.0
+	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v2 v2.0.2
 )
 
