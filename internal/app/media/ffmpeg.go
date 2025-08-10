@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/openai/openai-go/v2"
 )
 
 func CopyToHls(path string) error {
@@ -41,7 +43,7 @@ func CopyToHls(path string) error {
 	return nil
 }
 
-func ConvertToHls(path string) error {
+func ConvertToHls(openAIClient *openai.Client, path string) error {
 	fileExt := filepath.Ext(path)
 	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
 
@@ -53,7 +55,15 @@ func ConvertToHls(path string) error {
 	fmt.Printf("filePathWithoutExt: %s\n", filePathWithoutExt)
 	fmt.Printf("init.mp4: %s\n", filepath.Join(filePathWithoutExt, "init.mp4"))
 
-	args := []string{
+	// Получаем оптимизированные аргументы
+	args, err := GenerateFFMpegArgs(openAIClient, path)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(args)
+
+	/*args := []string{
 		"-i", path,
 		"-c:v", "libx264",
 		"-preset", "superfast",
@@ -69,25 +79,34 @@ func ConvertToHls(path string) error {
 		"-hls_flags", "independent_segments",
 		"-hls_segment_filename", "segment_%03d.ts",
 		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
-	}
+	}*/
 
 	/*args := []string{
+		// Входной файл
 		"-i", path,
+
+		// --- Настройки видео ---
+		"-map", "0:v:0", // ЯВНО выбираем ПЕРВЫЙ видеопоток
 		"-c:v", "libx264",
-		"-preset", "ultrafast",
-		"-movflags", "+faststart",
-		"-crf", "30",
+		"-pix_fmt", "yuv420p", // **КРИТИЧНО:** Конвертируем в 8-битный цвет для совместимости
+		"-preset", "fast", // Более разумный пресет, чем superfast
+		"-crf", "24", // Качество для 4K/больших файлов
+
+		// --- Настройки аудио ---
+		"-map", "0:a:0", // **КРИТИЧНО:** ЯВНО выбираем ПЕРВЫЙ аудиопоток (измените на нужный)
 		"-c:a", "aac",
-		"-b:a", "128k",
-		"-map", "0:v",
-		"-map", "0:a",
+		"-ac", "2", // **КРИТИЧНО:** Микшируем аудио в СТЕРЕО
+		"-b:a", "192k", // Качественный битрейт для стерео
+
+		// --- Настройки HLS ---
 		"-f", "hls",
-		"-hls_segment_type", "fmp4",
-		"-hls_time", "4",
+		"-hls_time", "4", // 4 секунды для 4K-видео нормально
 		"-hls_playlist_type", "vod",
-		"-hls_flags", "independent_segments",
+		"-hls_segment_type", "fmp4", // Рекомендуется для современных плееров
 		"-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", "segment_%03d.m4s",
+		"-hls_segment_filename", "segment_%04d.m4s", // Используйте .m4s для fmp4
+
+		// Выходной плейлист
 		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
 	}*/
 

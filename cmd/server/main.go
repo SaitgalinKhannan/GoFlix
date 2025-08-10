@@ -19,6 +19,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+
+	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/option"
 )
 
 func main() {
@@ -31,6 +34,11 @@ func main() {
 	// Ожидаем сигнал для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	openAIClient := openai.NewClient(
+		option.WithAPIKey("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"),
+		option.WithBaseURL("https://openrouter.ai/api/v1"),
+	)
 
 	// Хранилище состояний торрентов
 	torrentStates := "torrent_states.json"
@@ -107,7 +115,7 @@ func main() {
 				}
 
 				// Выполняем конвертацию
-				if err := torrent.ConvertTorrentToHls(clientBaseDir, t); err != nil {
+				if err := torrent.ConvertTorrentToHls(&openAIClient, clientBaseDir, t); err != nil {
 					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
 					// Помечаем как ошибку
 					if markErr := torrentClient.StateManager.MarkAsError(t.InfoHash); markErr != nil {

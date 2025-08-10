@@ -5,6 +5,8 @@ import (
 	"GoFlix/internal/pkg/filehelpers"
 	"os"
 	"path/filepath"
+
+	"github.com/openai/openai-go/v2"
 )
 
 func getPercent(n, total int64) float32 {
@@ -14,7 +16,7 @@ func getPercent(n, total int64) float32 {
 	return float32(int(float64(10000)*(float64(n)/float64(total)))) / 100
 }
 
-func ConvertTorrentToHls(baseDir string, torrent *Torrent) error {
+func ConvertTorrentToHls(openAIClient *openai.Client, baseDir string, torrent *Torrent) error {
 	torrentPath := filepath.Join(baseDir, torrent.Name)
 	abs, err := filepath.Abs(torrentPath)
 	if err != nil {
@@ -42,7 +44,7 @@ func ConvertTorrentToHls(baseDir string, torrent *Torrent) error {
 				return nil
 			}
 
-			err = media.ConvertToHls(path)
+			err = media.ConvertToHls(openAIClient, path)
 			if err != nil {
 				return err
 			}
@@ -50,6 +52,6 @@ func ConvertTorrentToHls(baseDir string, torrent *Torrent) error {
 			return nil
 		})
 	} else {
-		return media.ConvertToHls(abs)
+		return media.ConvertToHls(openAIClient, abs)
 	}
 }
