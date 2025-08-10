@@ -24,39 +24,25 @@ func (f *File) AddChild(child File) {
 func BuildSafePath(baseDir, userPath string) (string, error) {
 	// Очищаем путь от множественных слешей и относительных переходов
 	cleanPath := filepath.Clean(userPath)
-	fmt.Printf("cleanPath: %s\n", cleanPath)
 	// Убираем ведущий слеш если есть
 	if strings.HasPrefix(cleanPath, "/") && !strings.HasPrefix(cleanPath, baseDir) {
 		cleanPath = strings.TrimPrefix(cleanPath, "/")
-		fmt.Printf("cleanPath: %s\n", cleanPath)
 	}
 
 	// Строим полный путь
 	fullPath := cleanPath
-	fmt.Printf("fullPath: %s\n", fullPath)
 
 	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(fullPath, strings.TrimPrefix(baseDir, "/"))) {
-		fmt.Printf("strings.HasPrefix(fullPath, baseDir): %t\n", strings.HasPrefix(fullPath, baseDir))
-		fmt.Printf("---fullPath: %s\n", fullPath)
-		fmt.Printf("---baseDir: %s\n", baseDir)
-
-		fmt.Printf("strings.HasPrefix(strings.TrimPrefix(fullPath, /), baseDir): %t\n", strings.HasPrefix(strings.TrimPrefix(fullPath, "/"), baseDir))
-		fmt.Printf("---fullPath: %s\n", strings.TrimPrefix(fullPath, "/"))
-		fmt.Printf("---baseDir: %s\n", baseDir)
-
 		fullPath = filepath.Join(baseDir, cleanPath)
-		fmt.Printf("new fullPath: %s\n", fullPath)
 	}
 
 	// Получаем абсолютные пути для проверки
 	absBase, err := filepath.Abs(baseDir)
-	fmt.Printf("absBase: %s\n", absBase)
 	if err != nil {
 		return "", err
 	}
 
 	absPath, err := filepath.Abs(fullPath)
-	fmt.Printf("absPath: %s\n", absPath)
 	if err != nil {
 		return "", err
 	}
@@ -65,8 +51,6 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	if !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) && absPath != absBase {
 		return "", fmt.Errorf("path traversal detected")
 	}
-
-	fmt.Printf("fullPath: %s\n", fullPath)
 
 	return fullPath, nil
 }
