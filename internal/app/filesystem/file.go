@@ -26,7 +26,7 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	cleanPath := filepath.Clean(userPath)
 	fmt.Printf("cleanPath: %s\n", cleanPath)
 	// Убираем ведущий слеш если есть
-	if strings.HasPrefix(cleanPath, "/") {
+	if strings.HasPrefix(cleanPath, "/") && !strings.HasPrefix(cleanPath, baseDir) {
 		cleanPath = strings.TrimPrefix(cleanPath, "/")
 		fmt.Printf("cleanPath: %s\n", cleanPath)
 	}
@@ -35,7 +35,7 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	fullPath := cleanPath
 	fmt.Printf("fullPath: %s\n", fullPath)
 
-	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(strings.TrimPrefix(fullPath, "/"), baseDir)) {
+	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(fullPath, strings.TrimPrefix(baseDir, "/"))) {
 		fmt.Printf("strings.HasPrefix(fullPath, baseDir): %t\n", strings.HasPrefix(fullPath, baseDir))
 		fmt.Printf("---fullPath: %s\n", fullPath)
 		fmt.Printf("---baseDir: %s\n", baseDir)
