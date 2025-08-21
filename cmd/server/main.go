@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -35,13 +34,11 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	fmt.Printf("Config loaded:\n")
-	fmt.Printf("  Port: %s\n", cfg.Port)
-	fmt.Printf("  TorrentsStatesFile: %s\n", cfg.TorrentsStatesFile)
-	fmt.Printf("  TorrentsDir: %s\n", cfg.TorrentsDir)
-	fmt.Printf("  PieceCompletionDir: %s\n", cfg.PieceCompletionDir)
-	fmt.Printf("  OpenAIURL: %s\n", cfg.OpenAIURL)
-	fmt.Printf("  OpenAIKey: %s (first chars)\n", cfg.OpenAIKey[:5])
+	log.Printf("Config loaded:\n")
+	log.Printf("  Port: %s\n", cfg.Port)
+	log.Printf("  TorrentsStatesFile: %s\n", cfg.TorrentsStatesFile)
+	log.Printf("  TorrentsDir: %s\n", cfg.TorrentsDir)
+	log.Printf("  PieceCompletionDir: %s\n", cfg.PieceCompletionDir)
 
 	// Ожидаем сигнал для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -85,7 +82,7 @@ func main() {
 	// Запускаем обработчик событий
 	eventHandler.Start(torrentClient)
 
-	// Периодически проверяем торренты
+	// Периодически проверяем торренты и обновляем
 	ticker := time.NewTicker(5 * time.Second)
 	go func() {
 		defer ticker.Stop()

@@ -189,8 +189,6 @@ func (sm *StateManager) updateTorrentState(torrent *Torrent) {
 		torrent.ConvertedAt = nil
 	}
 
-	sm.states[torrent.InfoHash] = torrent
-
 	// Проверяем, если торрент только что завершился или его нет в списке и он завершился
 	if (oldTorrent != nil && !oldTorrent.Done && torrent.Done) || (!exists && torrent.Done) {
 		torrent.State = StateCompleted
@@ -210,6 +208,8 @@ func (sm *StateManager) updateTorrentState(torrent *Torrent) {
 			log.Println("Event channel is full, dropping event")
 		}
 	}
+
+	sm.states[torrent.InfoHash] = torrent
 
 	// Запланировать сохранение
 	select {
@@ -367,7 +367,7 @@ func (sm *StateManager) MarkAsQueued(infoHash string) error {
 		Torrent:   torrent,
 		Timestamp: now,
 	}
-	fmt.Println(event)
+
 	select {
 	case sm.eventChannel <- event:
 	default:

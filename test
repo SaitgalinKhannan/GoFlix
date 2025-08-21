@@ -1,0 +1,164 @@
+// GetTorrentWithVideoFiles return torrent by infoHash
+func (c *Client) GetTorrentWithVideoFiles(infoHash string) (*Torrent, error) {
+	torrents := c.tClient.Torrents()
+
+	for _, t := range torrents {
+		if t.InfoHash().String() == infoHash {
+			convertedTorrent, err := c.GetTorrentInfo(t)
+
+			if err != nil {
+				return nil, err
+			}
+
+			if convertedTorrent != nil {
+				// Вызываем функцию для получения информации о файлах
+				videoFiles, err := c.GetTorrentVideoFilesInfoByHash(convertedTorrent.InfoHash)
+				if err != nil {
+					// Если торрент не найден или произошла другая ошибка на уровне поиска, логируем ее. В VideoFiles останется nil.
+					log.Printf("[client] could not get video files for torrentForModifying %s (%s): %v", convertedTorrent.Name, convertedTorrent.InfoHash, err)
+				}
+				if videoFiles != nil {
+					convertedTorrent.VideoFiles = videoFiles
+				}
+
+				return convertedTorrent, nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
+// GetTorrentsWithVideoFiles получает список всех торрентов (активных и из состояния)
+// и параллельно загружает для них информацию о видеофайлах.
+func (c *Client) GetTorrentsWithVideoFiles() []Torrent {
+	// Шаг 1: Собираем полный список торрентов
+	torrents := c.GetTorrents()
+
+	// Шаг 2: Параллельно получаем информацию о видеофайлах для каждого торрента.
+	var wg sync.WaitGroup
+
+	// Ограничим количество одновременно работающих ffprobe, чтобы не перегрузить систему.
+	// 5 - это хорошее начало, можно подбирать под вашу систему.
+	concurrencyLimit := 5
+	semaphore := make(chan struct{}, concurrencyLimit)
+
+	for i := range torrents {
+		wg.Add(1)
+
+		// Запускаем горутину для каждого торрента
+		go func(index int) {
+			defer wg.Done()
+
+			// Захватываем "слот" в семафоре. Если все слоты заняты, горутина будет ждать.
+			semaphore <- struct{}{}
+			// Освобождаем слот после завершения работы
+			defer func() { <-semaphore }()
+
+			// Получаем указатель на торрент, чтобы модифицировать его на месте
+			torrentForModifying := &torrents[index]
+
+			// Вызываем вашу функцию для получения информации о файлах
+			videoFilesInfo, err := c.GetTorrentVideoFilesInfoByHash(torrentForModifying.InfoHash)
+			if err != nil {
+				// Если торрент не найден или произошла другая ошибка на уровне поиска,
+				// логируем ее. В VideoFiles останется nil.
+				log.Printf("[client] could not get video files for torrentForModifying %s (%s): %v", torrentForModifying.Name, torrentForModifying.InfoHash, err)
+				return
+			}
+
+			// Присваиваем результат полю в структуре торрента.
+			// GetTorrentVideoFilesInfoByHash уже обработала ошибки для отдельных файлов,
+			// поэтому мы просто присваиваем результат.
+			torrentForModifying.VideoFiles = videoFilesInfo
+
+		}(i) // Важно передать `i` как аргумент, чтобы избежать замыкания на переменной цикла!
+	}
+
+	// Ждем, пока все горутины завершат свою работу.
+	wg.Wait()
+
+	return torrents
+}
+
+// GetTorrentVideoFilesInfoByHash получает информацию обо всех видеофайлах в торренте параллельно.
+func (c *Client) GetTorrentVideoFilesInfoByHash(infoHash string) ([]VideoFile, error) {
+	torrentVideoFiles, err := c.GetTorrentVideoFilesByHash(infoHash)
+	if err != nil {
+		return []VideoFile{}, err
+	}
+
+	if len(torrentVideoFiles) == 0 {
+		return []VideoFile{}, nil // Нет видеофайлов, но это не ошибка
+	}
+
+	// Параллельная обработка файлов
+	var wg sync.WaitGroup
+	results := make([]VideoFile, len(torrentVideoFiles)) // Результаты будем писать по индексу, чтобы избежать гонки
+
+	for i, file := range torrentVideoFiles {
+		wg.Add(1)
+		go func(index int, path string) {
+			defer wg.Done()
+
+			// Используем media.GetVideoInfo с таймаутом
+			info, err := media.GetVideoInfo(path)
+
+			results[index] = VideoFile{
+				Path:      path,
+				VideoInfo: info,
+				Error:     err, // Сохраняем ошибку, если она была
+			}
+			if err != nil {
+				log.Printf("[client] Error getting video info for %s: %v", path, err)
+			}
+		}(i, file)
+	}
+
+	wg.Wait() // Ждем завершения всех горутин
+
+	return results, nil
+}
+
+// GetTorrentVideoFilesByHash возвращает список видеофайлов торрента
+func (c *Client) GetTorrentVideoFilesByHash(infoHash string) ([]string, error) {
+	// 1. УЛУЧШЕНИЕ: Прямой поиск торрента по хешу.
+	var t *torrent.Torrent
+	var ok bool
+	// Преобразуем hex-строку хеша в InfoHash
+	h := torrent.InfoHash{}
+	if err := h.FromHexString(infoHash); err != nil {
+		return nil, fmt.Errorf("invalid infoHash: %w", err)
+	}
+	t, ok = c.tClient.Torrent(h)
+	if !ok {
+		return nil, fmt.Errorf("torrent with hash %s not found", infoHash)
+	}
+
+	// Получаем информацию о торренте для определения базового пути
+	torrentInfo, err := c.GetTorrentInfo(t)
+	if err != nil {
+		return nil, err
+	}
+
+	var videoFiles []string
+	baseDir := c.getClientBaseDir() // Путь, куда клиент скачивает торренты
+	torrentName := torrentInfo.Name
+
+	for _, file := range t.Files() {
+		// Проверяем, является ли файл видеофайлом
+		if filehelpers.IsVideoFile(file.DisplayPath()) {
+			// Формируем полный путь к файлу
+			var fullPath string
+
+			if filehelpers.IsVideoFile(torrentName) {
+				fullPath = filepath.Join(baseDir, file.DisplayPath())
+			} else {
+				fullPath = filepath.Join(baseDir, torrentName, file.DisplayPath())
+			}
+			videoFiles = append(videoFiles, fullPath)
+		}
+	}
+
+	return videoFiles, nil
+}

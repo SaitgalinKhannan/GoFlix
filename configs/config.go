@@ -1,7 +1,6 @@
 package configs
 
 import (
-	"fmt"
 	"log"
 	"os"
 
@@ -13,8 +12,6 @@ type Config struct {
 	TorrentsStatesFile string
 	TorrentsDir        string
 	PieceCompletionDir string
-	OpenAIURL          string
-	OpenAIKey          string
 }
 
 func LoadConfig() (*Config, error) {
@@ -34,8 +31,6 @@ func LoadConfig() (*Config, error) {
 		TorrentsStatesFile: os.Getenv("TORRENTS_STATES_FILE"),
 		TorrentsDir:        os.Getenv("TORRENTS_DIR"),
 		PieceCompletionDir: os.Getenv("PIECE_COMPLETION_DIR"),
-		OpenAIURL:          os.Getenv("OPENAI_URL"),
-		OpenAIKey:          os.Getenv("OPENAI_KEY"),
 	}
 
 	// Установка значений по умолчанию, если переменные не заданы
@@ -50,14 +45,6 @@ func LoadConfig() (*Config, error) {
 	}
 	if cfg.PieceCompletionDir == "" {
 		cfg.PieceCompletionDir = "/app/data/torrent_data"
-	}
-	// Для OpenAI_URL и OpenAI_KEY лучше не задавать дефолты или требовать их
-	// Если они критически важны
-	if cfg.OpenAIURL == "" {
-		return nil, fmt.Errorf("OPENAI_URL is not set")
-	}
-	if cfg.OpenAIKey == "" {
-		return nil, fmt.Errorf("OPENAI_KEY is not set")
 	}
 
 	return cfg, nil

@@ -19,7 +19,7 @@ type FFMpegParams struct {
 	AudioBitrate  string `json:"audio_bitrate"`
 }
 
-// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
+/*// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
 func GenerateFFMpegArgs(path string) ([]string, error) {
 	fileExt := filepath.Ext(path)
 	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
@@ -60,6 +60,67 @@ func GenerateFFMpegArgs(path string) ([]string, error) {
 	}
 
 	return args, nil
+}*/
+
+// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
+func GenerateFFMpegArgs(path string) ([]string, error) {
+	fileExt := filepath.Ext(path)
+	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
+
+	info, err := GetVideoInfo(path)
+	if err != nil {
+		return nil, fmt.Errorf("[ffmpegArgs] failed to get video info path%s: %w", path, err)
+	}
+
+	params := GenerateOptimalParams(info)
+
+	// Длина сегмента в секундах
+	hlsTime := "4"
+
+	args := []string{
+		// Входной файл
+		"-i", path,
+
+		// --- Настройки видео ---
+		"-map", params.VideoMap,
+		"-c:v", params.VideoCodec,
+		"-pix_fmt", params.PixFmt,
+		"-preset", params.Preset,
+		"-crf", params.CRF,
+
+		// --- Настройки аудио ---
+		"-map", params.AudioMap,
+		"-c:a", params.AudioCodec,
+		"-ac", params.AudioChannels,
+		"-b:a", params.AudioBitrate,
+
+		// --- Настройки HLS ---
+		"-f", "hls",
+		"-hls_time", hlsTime,
+		"-hls_playlist_type", "vod",
+		"-hls_segment_type", "fmp4",
+
+		// --- Ключевое ИЗМЕНЕНИЕ ---
+		// Гарантирует, что каждый сегмент можно декодировать независимо.
+		// ffmpeg сам позаботится о расстановке ключевых кадров на границах сегментов.
+		"-hls_flags", "independent_segments",
+
+		"-hls_fmp4_init_filename", "init.mp4",
+		"-hls_segment_filename", "segment_%04d.m4s",
+
+		// Выходной плейлист
+		// filepath.Join не нужен, т.к. мы уже установили рабочую директорию через cmd.Dir
+		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
+	}
+
+	// Это изменение делает путь к плейлисту относительным, что более корректно
+	// при использовании cmd.Dir. Но ваш вариант с filepath.Join тоже будет работать.
+	// Если вы оставите filepath.Join, убедитесь, что в конце нет лишнего слэша.
+	// Например: `filepath.Join(filePathWithoutExt, "playlist.m3u8")` будет создавать абсолютный путь,
+	// что может быть не тем, что вы хотите, если filePathWithoutExt уже абсолютный.
+	// Вариант с относительным путем "playlist.m3u8" и cmd.Dir = filePathWithoutExt - самый чистый.
+
+	return args, nil
 }
 
 // GenerateOptimalParams генерирует оптимальные параметры для ffmpeg на основе анализа
@@ -81,13 +142,13 @@ func GenerateOptimalParams(info *VideoInfo) *FFMpegParams {
 		if stream.CodecType == "video" && stream.Index == 0 {
 			// Настройка CRF и preset по разрешению
 			if stream.Width >= 3840 { // 4K
-				params.CRF = "24"
+				params.CRF = "18"
 				params.Preset = "medium"
 			} else if stream.Width >= 1920 { // 1080p
 				params.CRF = "23"
 				params.Preset = "fast"
 			} else { // 720p и меньше
-				params.CRF = "22"
+				params.CRF = "24"
 				params.Preset = "faster"
 			}
 

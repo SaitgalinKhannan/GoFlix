@@ -65,17 +65,22 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 			log.Printf("Torrent already processed: %s", event.Torrent.Name)
 		}
 
-	case "queued_for_conversion":
-		log.Printf("Torrent queued for conversion: %s", event.Torrent.Name)
-
-	case "conversion_completed":
-		log.Printf("Torrent conversion completed: %s", event.Torrent.Name)
-
 	case "downloading_paused":
 		log.Printf("Torrent downloading paused: %s", event.Torrent.Name)
 
 	case "downloading_resumed":
 		log.Printf("Torrent downloading resumed: %s", event.Torrent.Name)
+
+	case "queued_for_conversion":
+		log.Printf("Torrent queued for conversion: %s", event.Torrent.Name)
+
+	case "conversion_completed":
+		log.Printf("Torrent conversion completed: %s", event.Torrent.Name)
+		t, err := client.GetTorrentFromClient(event.Torrent.InfoHash)
+		if err != nil {
+			log.Printf("[event] failed to get torrent from client: %v\n", err)
+		}
+		client.UpdateTorrentVideoFiles(event.Torrent, t)
 
 	default:
 		log.Printf("Unknown event type: %s", event.Type)

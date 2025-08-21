@@ -1,6 +1,9 @@
 package torrent
 
-import "time"
+import (
+	"GoFlix/internal/app/media"
+	"time"
+)
 
 // State представляет состояние торрента
 type State int
@@ -36,9 +39,12 @@ type Torrent struct {
 	ConvertedAt        *time.Time      `json:"convertedAt,omitempty"`
 	LastChecked        time.Time       `json:"lastChecked"`
 	DownloadedPercent  float32         `json:"downloadedPercent"`
+	VideoFiles         []VideoFile     `json:"videoFiles,omitempty"`
 }
 
-// WasCompleted проверяет, был ли торрент завершен ранее
-func (t *Torrent) WasCompleted() bool {
-	return t.State >= StateCompleted
+// VideoFile представляет информацию о видеофайле
+type VideoFile struct {
+	Path      string           `json:"path"`
+	VideoInfo *media.VideoInfo `json:"videoInfo"`
+	Error     error            `json:"error"`
 }

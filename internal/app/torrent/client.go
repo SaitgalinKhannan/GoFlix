@@ -1,13 +1,17 @@
 package torrent
 
 import (
+	"GoFlix/internal/app/media"
+	"GoFlix/internal/pkg/filehelpers"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/torrent"
@@ -20,6 +24,7 @@ var _ io.Closer = (*Client)(nil)
 type Client struct {
 	tClient      *torrent.Client
 	StateManager *StateManager
+	baseDir      string // Добавляем поле для хранения базовой директории
 }
 
 func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string) (*Client, error) {
@@ -56,7 +61,13 @@ func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string
 	return &Client{
 		tClient:      tClient,
 		StateManager: NewTorrentStateManager(stateFile),
+		baseDir:      clientBaseDir,
 	}, nil
+}
+
+// getClientBaseDir возвращает базовую директорию клиента
+func (c *Client) getClientBaseDir() string {
+	return c.baseDir
 }
 
 // Add Добавляем торрент через magnet-ссылку
@@ -123,12 +134,44 @@ func (c *Client) GetTorrentInfo(t *torrent.Torrent) (*Torrent, error) {
 			newTorrent.CompletedAt = oldTorrent.CompletedAt
 			newTorrent.ConvertingQueuedAt = oldTorrent.ConvertingQueuedAt
 			newTorrent.ConvertedAt = oldTorrent.ConvertedAt
+			newTorrent.VideoFiles = oldTorrent.VideoFiles
 		}
+
+		// Обновляем видео файлы (изменения будут видны в newTorrent)
+		c.UpdateTorrentVideoFiles(&newTorrent, t)
 
 		return &newTorrent, nil
 	}
 
 	return nil, errors.New("[client] torrent not found")
+}
+
+func (c *Client) UpdateTorrentVideoFiles(torrentForUpdate *Torrent, t *torrent.Torrent) {
+	if torrentForUpdate.Done &&
+		torrentForUpdate.State == StateCompleted &&
+		torrentForUpdate.ConvertingState == StateConverted &&
+		torrentForUpdate.VideoFiles == nil {
+
+		videoFiles, err := c.GetTorrentVideoFilesInfo(t)
+		if err != nil {
+			log.Printf("[client] GetTorrentVideoFilesInfo: %v\n", err)
+			return
+		}
+		torrentForUpdate.VideoFiles = videoFiles
+	}
+}
+
+// GetTorrentFromClient return torrent from client by infoHash
+func (c *Client) GetTorrentFromClient(infoHash string) (*torrent.Torrent, error) {
+	torrents := c.tClient.Torrents()
+
+	for _, t := range torrents {
+		if t.InfoHash().String() == infoHash {
+			return t, nil
+		}
+	}
+
+	return nil, nil
 }
 
 // GetTorrent return torrent by infoHash
@@ -151,25 +194,6 @@ func (c *Client) GetTorrent(infoHash string) (*Torrent, error) {
 
 	return nil, nil
 }
-
-/*func (c *Client) GetTorrents() ([]Torrent, error) {
-	ts := c.tClient.Torrents()
-	torrents := make([]Torrent, 0, len(ts))
-
-	for _, t := range ts {
-		newTorrent, err := c.GetTorrentInfo(t)
-
-		if err != nil {
-			log.Println(err)
-		}
-
-		if newTorrent != nil {
-			torrents = append(torrents, *newTorrent)
-		}
-	}
-
-	return torrents, nil
-}*/
 
 func (c *Client) GetTorrents() []Torrent {
 	ts := c.tClient.Torrents()
@@ -201,6 +225,80 @@ func (c *Client) GetTorrents() []Torrent {
 	}
 
 	return torrents
+}
+
+// GetTorrentVideoFiles возвращает список видеофайлов торрента
+func (c *Client) GetTorrentVideoFiles(t *torrent.Torrent) ([]string, error) {
+	// Получаем информацию о торренте для определения базового пути
+	/*torrentInfo, err := c.GetTorrentInfo(t)
+	if err != nil {
+		return nil, err
+	}*/
+
+	var videoFiles []string
+	baseDir := c.getClientBaseDir() // Путь, куда клиент скачивает торренты
+	torrentName := t.Name()
+
+	for _, file := range t.Files() {
+		// Проверяем, является ли файл видеофайлом
+		if filehelpers.IsVideoFile(file.DisplayPath()) {
+			// Формируем полный путь к файлу
+			var fullPath string
+			if filehelpers.IsVideoFile(torrentName) {
+				fullPath = filepath.Join(baseDir, file.DisplayPath())
+			} else {
+				fullPath = filepath.Join(baseDir, torrentName, file.DisplayPath())
+			}
+			videoFiles = append(videoFiles, fullPath)
+		}
+	}
+
+	return videoFiles, nil
+}
+
+// GetTorrentVideoFilesInfo получает информацию обо всех видеофайлах в торренте параллельно.
+func (c *Client) GetTorrentVideoFilesInfo(t *torrent.Torrent) ([]VideoFile, error) {
+	if t != nil {
+		torrentVideoFiles, err := c.GetTorrentVideoFiles(t)
+		if err != nil {
+			return []VideoFile{}, err
+		}
+
+		if len(torrentVideoFiles) == 0 {
+			return []VideoFile{}, nil // Нет видеофайлов, но это не ошибка
+		}
+
+		// Параллельная обработка файлов
+		var wg sync.WaitGroup
+		results := make([]VideoFile, len(torrentVideoFiles)) // Результаты будем писать по индексу, чтобы избежать гонки
+
+		for i, file := range torrentVideoFiles {
+			wg.Add(1)
+			go func(index int, path string) {
+				defer wg.Done()
+
+				// Используем media.GetVideoInfo с таймаутом
+				info, err := media.GetVideoInfo(path)
+
+				results[index] = VideoFile{
+					Path:      path,
+					VideoInfo: info,
+					Error:     err, // Сохраняем ошибку, если она была
+				}
+				if err != nil {
+					log.Printf("[client] Error getting video info for %s: %v", path, err)
+				}
+			}(i, file)
+		}
+
+		wg.Wait() // Ждем завершения всех горутин
+
+		return results, nil
+	} else {
+		log.Printf("[client] torrent not found")
+	}
+
+	return []VideoFile{}, nil
 }
 
 func (c *Client) PauseTorrent(infoHash string) error {
