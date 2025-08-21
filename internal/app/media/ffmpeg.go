@@ -6,8 +6,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/openai/openai-go/v2"
 )
 
 func CopyToHls(path string) error {
@@ -43,7 +41,7 @@ func CopyToHls(path string) error {
 	return nil
 }
 
-func ConvertToHls(openAIClient *openai.Client, path string) error {
+func ConvertToHls(path string) error {
 	fileExt := filepath.Ext(path)
 	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
 
@@ -56,7 +54,7 @@ func ConvertToHls(openAIClient *openai.Client, path string) error {
 	fmt.Printf("init.mp4: %s\n", filepath.Join(filePathWithoutExt, "init.mp4"))
 
 	// Получаем оптимизированные аргументы
-	args, err := GenerateFFMpegArgs(openAIClient, path)
+	args, err := GenerateFFMpegArgs(path)
 	if err != nil {
 		return err
 	}

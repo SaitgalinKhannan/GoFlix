@@ -21,9 +21,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-
-	"github.com/openai/openai-go/v2"
-	"github.com/openai/openai-go/v2/option"
 )
 
 func main() {
@@ -49,11 +46,6 @@ func main() {
 	// Ожидаем сигнал для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	openAIClient := openai.NewClient(
-		option.WithAPIKey(cfg.OpenAIKey),
-		option.WithBaseURL(cfg.OpenAIURL),
-	)
 
 	// Хранилище состояний торрентов
 	torrentStates := cfg.TorrentsStatesFile
@@ -130,7 +122,7 @@ func main() {
 				}
 
 				// Выполняем конвертацию
-				if err := torrent.ConvertTorrentToHls(&openAIClient, cfg, t); err != nil {
+				if err := torrent.ConvertTorrentToHls(cfg, t); err != nil {
 					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
 					// Помечаем как ошибку
 					if markErr := torrentClient.StateManager.MarkAsError(t.InfoHash); markErr != nil {
@@ -180,10 +172,11 @@ func main() {
 		api.Get("/health", handlers.HealthCheck(torrentClient))
 	})
 	router.Get("/ws", handlers.HandleWebSocket(torrentClient))
+	router.Get("/starfield/*", handlers.StarfieldHandler("./web"))
 
 	// Создаем HTTP-сервер
 	server := &http.Server{
-		Addr:    ":8081",
+		Addr:    ":8081", // Changed port to 8082
 		Handler: router,
 	}
 
@@ -227,7 +220,7 @@ func main() {
 		serverStopCtx()
 	}()
 
-	log.Println("Server started at :8081")
+	log.Println("Server started at :8081") // Updated log message
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("ListenAndServe(): %v", err)
 	}

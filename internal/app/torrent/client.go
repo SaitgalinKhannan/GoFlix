@@ -10,12 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent/storage"
-)
-
-import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 )
 
 var _ io.Closer = (*Client)(nil)
@@ -101,7 +98,7 @@ func (c *Client) GetTorrentInfo(t *torrent.Torrent) (*Torrent, error) {
 		magnet, err := metaInfo.MagnetV2()
 
 		if err != nil {
-			return nil, fmt.Errorf("[client] torrent's magnet not found:%v\n", err)
+			return nil, fmt.Errorf("[client] torrent's magnet not found:%v", err)
 		}
 
 		infoHash := t.InfoHash().String()
