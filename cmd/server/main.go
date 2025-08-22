@@ -90,7 +90,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				torrents := torrentClient.GetTorrents()
+				torrents := torrentService.GetTorrents()
 				for _, t := range torrents {
 					sm.UpdateTorrent(&t)
 				}
