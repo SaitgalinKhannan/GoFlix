@@ -3,6 +3,7 @@ package media
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ type FFMpegParams struct {
 	AudioBitrate  string `json:"audio_bitrate"`
 }
 
-/*// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
+// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
 func GenerateFFMpegArgs(path string) ([]string, error) {
 	fileExt := filepath.Ext(path)
 	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
@@ -30,56 +31,21 @@ func GenerateFFMpegArgs(path string) ([]string, error) {
 		return nil, fmt.Errorf("[ffmpegArgs] failed to get video info path%s: %w", path, err)
 	}
 
-	// 2. Генерируем оптимальные параметры на основе анализа файла
+	// 2. Генерируем оптимальные параметры
 	params := GenerateOptimalParams(info)
 
-	// 3. Формируем аргументы ffmpeg
-	args := []string{
-		// Входной файл
-		"-i", path,
-		// --- Настройки видео ---
-		"-map", params.VideoMap,
-		"-c:v", params.VideoCodec,
-		"-pix_fmt", params.PixFmt,
-		"-preset", params.Preset,
-		"-crf", params.CRF,
-		// --- Настройки аудио ---
-		"-map", params.AudioMap,
-		"-c:a", params.AudioCodec,
-		"-ac", params.AudioChannels,
-		"-b:a", params.AudioBitrate,
-		// --- Настройки HLS ---
-		"-f", "hls",
-		"-hls_time", "4",
-		"-hls_playlist_type", "vod",
-		"-hls_segment_type", "fmp4",
-		"-hls_fmp4_init_filename", "init.mp4",
-		"-hls_segment_filename", "segment_%04d.m4s",
-		// Выходной плейлист
-		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
-	}
-
-	return args, nil
-}*/
-
-// GenerateFFMpegArgs генерирует аргументы для ffmpeg на основе анализа файла
-func GenerateFFMpegArgs(path string) ([]string, error) {
-	fileExt := filepath.Ext(path)
-	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
-
-	info, err := GetVideoInfo(path)
-	if err != nil {
-		return nil, fmt.Errorf("[ffmpegArgs] failed to get video info path%s: %w", path, err)
-	}
-
-	params := GenerateOptimalParams(info)
-
-	// Длина сегмента в секундах
-	hlsTime := "4"
+	// 3. РАССЧИТЫВАЕМ GOP (критически важно!)
+	fps := extractFPS(info)                     // Получаем FPS из VideoInfo
+	hlsTime := 4.0                              // Должно совпадать с "-hls_time 4"
+	gopSize := strconv.Itoa(int(fps * hlsTime)) // GOP в кадрах = FPS * длина сегмента
 
 	args := []string{
 		// Входной файл
 		"-i", path,
+
+		// Нормализация временных меток
+		"-avoid_negative_ts", "make_zero",
+		"-fflags", "+genpts",
 
 		// --- Настройки видео ---
 		"-map", params.VideoMap,
@@ -87,16 +53,24 @@ func GenerateFFMpegArgs(path string) ([]string, error) {
 		"-pix_fmt", params.PixFmt,
 		"-preset", params.Preset,
 		"-crf", params.CRF,
+		"-vsync", "cfr",
+
+		// Ключевые кадры для правильной сегментации
+		"-force_key_frames", "expr:gte(t,n_forced*4)",
+		"-g", gopSize,
+		"-keyint_min", gopSize,
+		"-sc_threshold", "0",
 
 		// --- Настройки аудио ---
 		"-map", params.AudioMap,
 		"-c:a", params.AudioCodec,
 		"-ac", params.AudioChannels,
 		"-b:a", params.AudioBitrate,
+		"-async", "1", // Аудио синхронизация
 
 		// --- Настройки HLS ---
 		"-f", "hls",
-		"-hls_time", hlsTime,
+		"-hls_time", strconv.FormatFloat(hlsTime, 'f', 0, 64),
 		"-hls_playlist_type", "vod",
 		"-hls_segment_type", "fmp4",
 
@@ -104,21 +78,11 @@ func GenerateFFMpegArgs(path string) ([]string, error) {
 		// Гарантирует, что каждый сегмент можно декодировать независимо.
 		// ffmpeg сам позаботится о расстановке ключевых кадров на границах сегментов.
 		"-hls_flags", "independent_segments",
-
 		"-hls_fmp4_init_filename", "init.mp4",
 		"-hls_segment_filename", "segment_%04d.m4s",
 
-		// Выходной плейлист
-		// filepath.Join не нужен, т.к. мы уже установили рабочую директорию через cmd.Dir
 		filepath.Join(filePathWithoutExt, "playlist.m3u8"),
 	}
-
-	// Это изменение делает путь к плейлисту относительным, что более корректно
-	// при использовании cmd.Dir. Но ваш вариант с filepath.Join тоже будет работать.
-	// Если вы оставите filepath.Join, убедитесь, что в конце нет лишнего слэша.
-	// Например: `filepath.Join(filePathWithoutExt, "playlist.m3u8")` будет создавать абсолютный путь,
-	// что может быть не тем, что вы хотите, если filePathWithoutExt уже абсолютный.
-	// Вариант с относительным путем "playlist.m3u8" и cmd.Dir = filePathWithoutExt - самый чистый.
 
 	return args, nil
 }

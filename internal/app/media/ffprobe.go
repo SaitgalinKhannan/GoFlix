@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +44,7 @@ type Stream struct {
 	Refs               int         `json:"refs,omitempty"`
 	RFrameRate         string      `json:"r_frame_rate,omitempty"`
 	AvgFrameRate       string      `json:"avg_frame_rate,omitempty"`
+	NbFrames           string      `json:"nb_frames,omitempty"` // Количество кадров в потоке
 	TimeBase           string      `json:"time_base,omitempty"`
 	StartPts           int64       `json:"start_pts,omitempty"`
 	StartTime          string      `json:"start_time,omitempty"`
@@ -124,19 +127,6 @@ func GetVideoInfo(path string) (*VideoInfo, error) {
 		path,
 	}
 
-	/*cmd := exec.Command("ffprobe", args...)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("failed to run ffprobe: %w", err)
-	}
-
-	var info VideoInfo
-	if unmarshalErr := json.Unmarshal(output, &info); unmarshalErr != nil {
-		return nil, fmt.Errorf("failed to parse ffprobe output: %w", unmarshalErr)
-	}
-
-	return &info, nil*/
-
 	cmd := exec.CommandContext(ctx, "ffprobe", args...)
 	output, err := cmd.Output()
 
@@ -157,4 +147,67 @@ func GetVideoInfo(path string) (*VideoInfo, error) {
 	}
 
 	return &info, nil
+}
+
+// extractFPS безопасно извлекает FPS из VideoInfo
+func extractFPS(info *VideoInfo) float64 {
+	for _, stream := range info.Streams {
+		// Ищем первый видеопоток
+		if stream.CodecType == "video" && stream.AvgFrameRate != "" {
+			rateStr := stream.AvgFrameRate
+
+			// Обрабатываем специальный случай "0/0" (неизвестный FPS)
+			if rateStr == "0/0" {
+				continue
+			}
+
+			// Разбиваем строку на числитель и знаменатель
+			parts := strings.Split(rateStr, "/")
+			if len(parts) != 2 {
+				continue
+			}
+
+			// Парсим числитель и знаменатель
+			num, errNum := strconv.ParseFloat(parts[0], 64)
+			den, errDen := strconv.ParseFloat(parts[1], 64)
+
+			// Проверяем корректность значений
+			if errNum != nil || errDen != nil || den == 0 {
+				continue
+			}
+
+			fps := num / den
+
+			// Защита от аномальных значений (например, 1000000/1)
+			if fps > 0 && fps < 120 {
+				return fps
+			}
+		}
+	}
+
+	// Дефолтные значения для распространенных стандартов
+	if info.Format.Duration != "" {
+		duration, _ := strconv.ParseFloat(info.Format.Duration, 64)
+		if duration > 0 {
+			// Пытаемся рассчитать FPS через количество кадров (если доступно)
+			for _, stream := range info.Streams {
+				if stream.CodecType == "video" && stream.NbFrames != "" {
+					frames, _ := strconv.Atoi(stream.NbFrames)
+					if frames > 0 {
+						return float64(frames) / duration
+					}
+				}
+			}
+		}
+	}
+
+	// Последняя инстанция - стандартные значения
+	switch {
+	case strings.Contains(info.Format.FormatName, "avi"):
+		return 25.0 // PAL
+	case strings.Contains(info.Format.FormatName, "mov"):
+		return 29.97
+	default:
+		return 30.0 // Самый безопасный дефолт
+	}
 }
