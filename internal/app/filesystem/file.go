@@ -32,7 +32,7 @@ func BuildSafePath(baseDir, userPath string) (string, error) {
 	// Строим полный путь
 	fullPath := cleanPath
 
-	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(fullPath, strings.TrimPrefix(baseDir, "/"))) {
+	if !(strings.HasPrefix(fullPath, baseDir) || strings.HasPrefix(fullPath, strings.TrimPrefix(baseDir, "./"))) {
 		fullPath = filepath.Join(baseDir, cleanPath)
 	}
 
