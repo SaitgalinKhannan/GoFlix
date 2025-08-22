@@ -83,6 +83,24 @@ func main() {
 	eventHandler := torrent.NewEventHandler(torrentService)
 	eventHandler.Start()
 
+	// Периодически проверяем торренты и обновляем
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				torrents := torrentClient.GetTorrents()
+				for _, t := range torrents {
+					sm.UpdateTorrent(&t)
+				}
+			case <-sigChan:
+				log.Println("Received shutdown signal, stopping torrent monitoring...")
+				return
+			}
+		}
+	}()
+
 	// Обрабатываем очередь конвертации
 	go func() {
 		for {
