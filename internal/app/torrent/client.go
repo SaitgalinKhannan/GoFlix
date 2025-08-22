@@ -174,9 +174,15 @@ func (c *Client) GetTorrentVideoFiles(t *torrent.Torrent) ([]string, error) {
 }
 
 // GetTorrentVideoFilesInfo retrieves information about all video files in a torrent concurrently.
-func (c *Client) GetTorrentVideoFilesInfo(t *torrent.Torrent) ([]VideoFile, error) {
-	if t == nil {
+func (c *Client) GetTorrentVideoFilesInfo(localTorrent *Torrent) ([]VideoFile, error) {
+	if localTorrent == nil {
 		return nil, errors.New("torrent is nil")
+	}
+
+	hash := metainfo.NewHashFromHex(localTorrent.InfoHash)
+	t, ok := c.tClient.Torrent(hash)
+	if !ok {
+		return nil, fmt.Errorf("torrent with infohash %s not found in client", localTorrent.InfoHash)
 	}
 
 	torrentVideoFiles, err := c.GetTorrentVideoFiles(t)

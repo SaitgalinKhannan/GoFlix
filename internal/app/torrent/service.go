@@ -50,6 +50,15 @@ func (s *Service) GetTorrents() []Torrent {
 	torrents := make([]Torrent, 0, len(torrentsMap))
 
 	for _, t := range torrentsMap {
+		if t.Done && t.VideoFiles == nil {
+			info, err := s.client.GetTorrentVideoFilesInfo(t)
+			if err != nil {
+				fmt.Println(err)
+			}
+			if info != nil {
+				t.VideoFiles = info
+			}
+		}
 		torrents = append(torrents, *t)
 	}
 
@@ -66,11 +75,23 @@ func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 			t.DownloadedPercent = activeTorrent.DownloadedPercent
 			t.Done = activeTorrent.Done
 		}
+
+		// обновление информации о видео файлах
+		s.updateTorrentVideoFiles(t)
+
 		return t, nil
 	}
 
 	// If not in state, check the client directly
-	return s.client.GetTorrent(infoHash)
+	torrent, err := s.client.GetTorrent(infoHash)
+	if err != nil || torrent == nil {
+		return nil, err
+	}
+
+	// обновление информации о видео файлах
+	s.updateTorrentVideoFiles(t)
+
+	return torrent, nil
 }
 
 // PauseTorrent pauses a torrent.
@@ -126,4 +147,18 @@ func (s *Service) ConvertTorrent(infoHash string) error {
 	}
 
 	return nil
+}
+
+// updateTorrentVideoFiles обновляет информацию о видеофайлах торрента, если она отсутствует и торрент завершён.
+func (s *Service) updateTorrentVideoFiles(t *Torrent) {
+	if t.Done && t.VideoFiles == nil {
+		info, err := s.client.GetTorrentVideoFilesInfo(t)
+		if err != nil {
+			fmt.Println("Error fetching video files info:", err)
+			return
+		}
+		if info != nil {
+			t.VideoFiles = info
+		}
+	}
 }
