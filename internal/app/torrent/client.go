@@ -22,21 +22,17 @@ import (
 var _ io.Closer = (*Client)(nil)
 
 type Client struct {
-	tClient      *torrent.Client
-	StateManager *StateManager
-	baseDir      string // Добавляем поле для хранения базовой директории
+	tClient *torrent.Client
+	baseDir string
 }
 
-func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string) (*Client, error) {
+func NewClient(clientBaseDir string, pieceCompletionDir string) (*Client, error) {
 	config := torrent.NewDefaultClientConfig()
 
-	err := os.MkdirAll(clientBaseDir, 0o700)
-	if err != nil {
+	if err := os.MkdirAll(clientBaseDir, 0o700); err != nil {
 		return nil, err
 	}
-
-	err = os.MkdirAll(pieceCompletionDir, 0o700)
-	if err != nil {
+	if err := os.MkdirAll(pieceCompletionDir, 0o700); err != nil {
 		return nil, err
 	}
 
@@ -46,10 +42,9 @@ func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string
 	}
 
 	opts := storage.NewFileClientOpts{
-		ClientBaseDir:   clientBaseDir, // файлы торрентов будут храниться здесь
+		ClientBaseDir:   clientBaseDir,
 		PieceCompletion: pieceCompletion,
 	}
-	// Создаем клиент хранения с настроенными путями
 	storageClient := storage.NewFileOpts(opts)
 	config.DefaultStorage = storageClient
 
@@ -59,18 +54,17 @@ func NewClient(clientBaseDir string, pieceCompletionDir string, stateFile string
 	}
 
 	return &Client{
-		tClient:      tClient,
-		StateManager: NewTorrentStateManager(stateFile),
-		baseDir:      clientBaseDir,
+		tClient: tClient,
+		baseDir: clientBaseDir,
 	}, nil
 }
 
-// getClientBaseDir возвращает базовую директорию клиента
+// getClientBaseDir returns the base directory of the client.
 func (c *Client) getClientBaseDir() string {
 	return c.baseDir
 }
 
-// Add Добавляем торрент через magnet-ссылку
+// Add adds a torrent via magnet link or file path.
 func (c *Client) Add(magnet string) (string, error) {
 	var t *torrent.Torrent
 	var err error
@@ -88,165 +82,88 @@ func (c *Client) Add(magnet string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
 	if t == nil {
 		return "", fmt.Errorf("failed to add torrent: %s", magnet)
 	}
 
-	// Ждем метаданные (критично для magnet-ссылок)
 	<-t.GotInfo()
 	t.DownloadAll()
 
+	return t.InfoHash().String(), nil
+}
+
+// toTorrent converts a torrent.Torrent to our local Torrent type.
+func (c *Client) toTorrent(t *torrent.Torrent) (*Torrent, error) {
+	if t == nil {
+		return nil, errors.New("cannot convert nil torrent")
+	}
+
+	metaInfo := t.Metainfo()
+	magnet, err := metaInfo.MagnetV2()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get magnet link: %w", err)
+	}
+
 	infoHash := t.InfoHash().String()
-
-	return infoHash, nil
-}
-
-// GetTorrentInfo convert *torrent.Torrent to Torrent
-func (c *Client) GetTorrentInfo(t *torrent.Torrent) (*Torrent, error) {
-	if t != nil {
-		metaInfo := t.Metainfo()
-		magnet, err := metaInfo.MagnetV2()
-
-		if err != nil {
-			return nil, fmt.Errorf("[client] torrent's magnet not found:%v", err)
-		}
-
-		infoHash := t.InfoHash().String()
-		percent := getPercent(t.BytesCompleted(), t.Length())
-		newTorrent := Torrent{
-			InfoHash:          infoHash,
-			Name:              t.Name(),
-			Magnet:            magnet.String(),
-			Size:              t.Length(),
-			Done:              int(percent) == 100,
-			DownloadedPercent: percent,
-			State:             StateDownloading,
-			ConvertingState:   StateNotConverted,
-			LastChecked:       time.Now(),
-		}
-
-		// get torrent state
-		oldTorrent, exist := c.StateManager.states[infoHash]
-		if exist && oldTorrent != nil && newTorrent.Done {
-			newTorrent.State = oldTorrent.State
-			newTorrent.ConvertingState = oldTorrent.ConvertingState
-			newTorrent.CompletedAt = oldTorrent.CompletedAt
-			newTorrent.ConvertingQueuedAt = oldTorrent.ConvertingQueuedAt
-			newTorrent.ConvertedAt = oldTorrent.ConvertedAt
-			newTorrent.VideoFiles = oldTorrent.VideoFiles
-		}
-
-		// Обновляем видео файлы (изменения будут видны в newTorrent)
-		c.UpdateTorrentVideoFiles(&newTorrent, t)
-
-		return &newTorrent, nil
+	done := t.BytesCompleted() == t.Length()
+	percent := getPercent(t.BytesCompleted(), t.Length())
+	state := StateDownloading
+	if done {
+		state = StateCompleted
 	}
 
-	return nil, errors.New("[client] torrent not found")
+	return &Torrent{
+		InfoHash:          infoHash,
+		Name:              t.Name(),
+		Magnet:            magnet.String(),
+		Size:              t.Length(),
+		Done:              done,
+		DownloadedPercent: percent,
+		State:             state,
+		ConvertingState:   StateNotConverted,
+		LastChecked:       time.Now(),
+	}, nil
 }
 
-func (c *Client) UpdateTorrentVideoFiles(torrentForUpdate *Torrent, t *torrent.Torrent) {
-	if torrentForUpdate.Done &&
-		torrentForUpdate.State == StateCompleted &&
-		torrentForUpdate.ConvertingState == StateConverted &&
-		torrentForUpdate.VideoFiles == nil {
-
-		videoFiles, err := c.GetTorrentVideoFilesInfo(t)
-		if err != nil {
-			log.Printf("[client] GetTorrentVideoFilesInfo: %v\n", err)
-			return
-		}
-		torrentForUpdate.VideoFiles = videoFiles
-	}
-}
-
-// GetTorrentFromClient return torrent from client by infoHash
-func (c *Client) GetTorrentFromClient(infoHash string) (*torrent.Torrent, error) {
-	torrents := c.tClient.Torrents()
-
-	for _, t := range torrents {
-		if t.InfoHash().String() == infoHash {
-			return t, nil
-		}
-	}
-
-	return nil, nil
-}
-
-// GetTorrent return torrent by infoHash
+// GetTorrent returns a torrent by its infoHash.
 func (c *Client) GetTorrent(infoHash string) (*Torrent, error) {
-	torrents := c.tClient.Torrents()
-
-	for _, t := range torrents {
-		if t.InfoHash().String() == infoHash {
-			convertedTorrent, err := c.GetTorrentInfo(t)
-
-			if err != nil {
-				return nil, err
-			}
-
-			if convertedTorrent != nil {
-				return convertedTorrent, nil
-			}
-		}
+	hash := metainfo.NewHashFromHex(infoHash)
+	t, ok := c.tClient.Torrent(hash)
+	if !ok {
+		return nil, fmt.Errorf("torrent with infohash %s not found in client", infoHash)
 	}
-
-	return nil, nil
+	return c.toTorrent(t)
 }
 
+// GetTorrents returns all active torrents from the client.
 func (c *Client) GetTorrents() []Torrent {
-	ts := c.tClient.Torrents()
-	// tsFromState is a map where the key is the InfoHash. This is very useful.
-	tsFromState := c.StateManager.GetAllTorrents()
+	activeTorrents := c.tClient.Torrents()
+	torrents := make([]Torrent, 0, len(activeTorrents))
 
-	// Pre-allocate slice capacity for better performance, assuming most torrents will be active.
-	torrents := make([]Torrent, 0, len(ts)+len(tsFromState))
-
-	// First, add all the currently active torrents from the client.
-	for _, t := range ts {
-		newTorrent, err := c.GetTorrentInfo(t)
+	for _, t := range activeTorrents {
+		converted, err := c.toTorrent(t)
 		if err != nil {
-			log.Printf("[client] error getting torrent info: %v", err)
-			continue // Skip to the next torrent
+			log.Printf("[client] error converting torrent: %v", err)
+			continue
 		}
-		if newTorrent != nil {
-			torrents = append(torrents, *newTorrent)
-			// Since we've found this torrent, remove it from the state map.
-			// This way, tsFromState will only contain torrents that are not currently active.
-			delete(tsFromState, newTorrent.InfoHash)
-		}
+		torrents = append(torrents, *converted)
 	}
-
-	// Now, add the remaining torrents from the state that were not in the active list.
-	// The loop will iterate over what's left in the map.
-	for _, stateTorrent := range tsFromState {
-		torrents = append(torrents, *stateTorrent)
-	}
-
 	return torrents
 }
 
-// GetTorrentVideoFiles возвращает список видеофайлов торрента
+// GetTorrentVideoFiles returns a list of video files for a torrent.
 func (c *Client) GetTorrentVideoFiles(t *torrent.Torrent) ([]string, error) {
-	// Получаем информацию о торренте для определения базового пути
-	/*torrentInfo, err := c.GetTorrentInfo(t)
-	if err != nil {
-		return nil, err
-	}*/
-
 	var videoFiles []string
-	baseDir := c.getClientBaseDir() // Путь, куда клиент скачивает торренты
+	baseDir := c.getClientBaseDir()
 	torrentName := t.Name()
 
 	for _, file := range t.Files() {
-		// Проверяем, является ли файл видеофайлом
 		if filehelpers.IsVideoFile(file.DisplayPath()) {
-			// Формируем полный путь к файлу
 			var fullPath string
 			if filehelpers.IsVideoFile(torrentName) {
 				fullPath = filepath.Join(baseDir, file.DisplayPath())
 			} else {
+				// if file in folder
 				fullPath = filepath.Join(baseDir, torrentName, file.DisplayPath())
 			}
 			videoFiles = append(videoFiles, fullPath)
@@ -256,116 +173,68 @@ func (c *Client) GetTorrentVideoFiles(t *torrent.Torrent) ([]string, error) {
 	return videoFiles, nil
 }
 
-// GetTorrentVideoFilesInfo получает информацию обо всех видеофайлах в торренте параллельно.
+// GetTorrentVideoFilesInfo retrieves information about all video files in a torrent concurrently.
 func (c *Client) GetTorrentVideoFilesInfo(t *torrent.Torrent) ([]VideoFile, error) {
-	if t != nil {
-		torrentVideoFiles, err := c.GetTorrentVideoFiles(t)
-		if err != nil {
-			return []VideoFile{}, err
-		}
-
-		if len(torrentVideoFiles) == 0 {
-			return []VideoFile{}, nil // Нет видеофайлов, но это не ошибка
-		}
-
-		// Параллельная обработка файлов
-		var wg sync.WaitGroup
-		results := make([]VideoFile, len(torrentVideoFiles)) // Результаты будем писать по индексу, чтобы избежать гонки
-
-		for i, file := range torrentVideoFiles {
-			wg.Add(1)
-			go func(index int, path string) {
-				defer wg.Done()
-
-				// Используем media.GetVideoInfo с таймаутом
-				info, err := media.GetVideoInfo(path)
-
-				results[index] = VideoFile{
-					Path:      path,
-					VideoInfo: info,
-					Error:     err, // Сохраняем ошибку, если она была
-				}
-				if err != nil {
-					log.Printf("[client] Error getting video info for %s: %v", path, err)
-				}
-			}(i, file)
-		}
-
-		wg.Wait() // Ждем завершения всех горутин
-
-		return results, nil
-	} else {
-		log.Printf("[client] torrent not found")
+	if t == nil {
+		return nil, errors.New("torrent is nil")
 	}
 
-	return []VideoFile{}, nil
+	torrentVideoFiles, err := c.GetTorrentVideoFiles(t)
+	if err != nil {
+		return nil, err
+	}
+	if len(torrentVideoFiles) == 0 {
+		return []VideoFile{}, nil
+	}
+
+	var wg sync.WaitGroup
+	results := make([]VideoFile, len(torrentVideoFiles))
+
+	for i, file := range torrentVideoFiles {
+		wg.Add(1)
+		go func(index int, path string) {
+			defer wg.Done()
+
+			info, err := media.GetVideoInfo(path)
+			results[index] = VideoFile{
+				Path:      path,
+				VideoInfo: info,
+				Error:     err,
+			}
+			if err != nil {
+				log.Printf("[client] Error getting video info for %s: %v", path, err)
+			}
+		}(i, file)
+	}
+	wg.Wait()
+
+	return results, nil
 }
 
+// PauseTorrent pauses a torrent's download.
 func (c *Client) PauseTorrent(infoHash string) error {
-	torrents := c.tClient.Torrents()
-
-	for _, t := range torrents {
-		if t.InfoHash().String() == infoHash {
-			t.Drop()
-			return c.StateManager.MarkAsPaused(infoHash)
-		}
+	hash := metainfo.NewHashFromHex(infoHash)
+	t, ok := c.tClient.Torrent(hash)
+	if !ok {
+		return fmt.Errorf("torrent with infohash %s not found", infoHash)
 	}
-
+	t.Drop()
 	return nil
 }
 
-func (c *Client) ResumeTorrent(infoHash string) error {
-	torrents := c.GetTorrents()
-
-	for _, t := range torrents {
-		if t.InfoHash == infoHash {
-			if _, err := c.Add(t.Magnet); err != nil {
-				return fmt.Errorf("[client] Failed to add torrent to client: %v\n", err)
-			}
-			return c.StateManager.MarkAsResumed(infoHash)
-		}
-	}
-
-	return nil
-}
-
+// DeleteTorrent removes a torrent from the client.
 func (c *Client) DeleteTorrent(infoHash string) error {
-	torrents := c.tClient.Torrents()
-
-	for _, t := range torrents {
-		if t.InfoHash().String() == infoHash {
-			t.Drop()
-		}
+	hash := metainfo.NewHashFromHex(infoHash)
+	t, ok := c.tClient.Torrent(hash)
+	if !ok {
+		// If torrent is not in client, it's not an error in this context.
+		return nil
 	}
-
+	t.Drop()
 	return nil
 }
 
-func (c *Client) ConvertTorrent(infoHash string) error {
-	torrents := c.GetTorrents()
-
-	for _, t := range torrents {
-		if t.InfoHash == infoHash {
-			if err := c.StateManager.MarkAsQueued(t.InfoHash); err != nil {
-				return fmt.Errorf("error marking torrent as queued: %v", err)
-			} else {
-				// Добавляем в очередь конвертации
-				select {
-				case c.StateManager.conversionQueue <- &t:
-					log.Printf("Added torrent to conversion queue: %s", t.Name)
-				default:
-					log.Printf("Conversion queue is full, torrent: %s", t.Name)
-					return fmt.Errorf("torrent conversion queue is full")
-				}
-			}
-			break
-		}
-	}
-
-	return nil
-}
-
-// Close Закрывает торрент-клиент
+// Close gracefully shuts down the torrent client.
 func (c *Client) Close() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -374,23 +243,12 @@ func (c *Client) Close() error {
 		<-ctx.Done()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			log.Println("[torrent] FORCE shutdown (timeout)")
-			os.Exit(1) // Крайний случай
+			os.Exit(1)
 		}
 	}()
 
 	log.Println("[torrent] Initiating graceful shutdown...")
-
-	// 1. Останавливаем все торренты
-	for _, t := range c.tClient.Torrents() {
-		log.Printf("[torrent] Removing %s", t.InfoHash().String())
-		t.Drop() // Корректная остановка торрента
-	}
-
-	// 2. Закрываем клиент
-	if err := c.tClient.Close(); err != nil {
-		log.Printf("[torrent] Error during shutdown: %v", err)
-	}
-
+	c.tClient.Close()
 	log.Println("[torrent] Shutdown completed")
 
 	return nil

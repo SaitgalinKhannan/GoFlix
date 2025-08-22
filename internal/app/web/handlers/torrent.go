@@ -13,7 +13,7 @@ type addRequest struct {
 	Source string `json:"source"`
 }
 
-func AddTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func AddTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req addRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -22,7 +22,7 @@ func AddTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		infoHash, err := client.Add(req.Source)
+		infoHash, err := service.AddTorrent(req.Source)
 
 		if err != nil {
 			log.Println(err)
@@ -39,7 +39,7 @@ func AddTorrentHandler(client *torrent.Client) http.HandlerFunc {
 	}
 }
 
-func GetTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func GetTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {
@@ -47,7 +47,7 @@ func GetTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		t, err := client.GetTorrent(hash)
+		t, err := service.GetTorrent(hash)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -62,9 +62,9 @@ func GetTorrentHandler(client *torrent.Client) http.HandlerFunc {
 	}
 }
 
-func GetTorrentsHandler(client *torrent.Client) http.HandlerFunc {
+func GetTorrentsHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		torrents := client.GetTorrents()
+		torrents := service.GetTorrents()
 
 		w.Header().Set("Content-Type", "application/json")
 
@@ -76,7 +76,7 @@ func GetTorrentsHandler(client *torrent.Client) http.HandlerFunc {
 }
 
 // PauseTorrentHandler обрабатывает PATCH /{hash}/pause
-func PauseTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func PauseTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {
@@ -84,7 +84,7 @@ func PauseTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		err := client.PauseTorrent(hash)
+		err := service.PauseTorrent(hash)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError) // Или 400, если ошибка от клиента
 			return
@@ -95,7 +95,7 @@ func PauseTorrentHandler(client *torrent.Client) http.HandlerFunc {
 }
 
 // ResumeTorrentHandler обрабатывает PATCH /{hash}/resume
-func ResumeTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func ResumeTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {
@@ -103,7 +103,7 @@ func ResumeTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		err := client.ResumeTorrent(hash)
+		err := service.ResumeTorrent(hash)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -114,7 +114,7 @@ func ResumeTorrentHandler(client *torrent.Client) http.HandlerFunc {
 }
 
 // DeleteTorrentHandler обрабатывает DELETE /{hash}
-func DeleteTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func DeleteTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {
@@ -122,7 +122,7 @@ func DeleteTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		err := client.DeleteTorrent(hash)
+		err := service.DeleteTorrent(hash)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -133,7 +133,7 @@ func DeleteTorrentHandler(client *torrent.Client) http.HandlerFunc {
 }
 
 // ConvertTorrentHandler обрабатывает POST /{hash}/convert
-func ConvertTorrentHandler(client *torrent.Client) http.HandlerFunc {
+func ConvertTorrentHandler(service *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		hash := chi.URLParam(r, "hash")
 		if hash == "" {
@@ -142,7 +142,7 @@ func ConvertTorrentHandler(client *torrent.Client) http.HandlerFunc {
 			return
 		}
 
-		err := client.ConvertTorrent(hash) // Или client.Convert(hash), в зависимости от вашего API
+		err := service.ConvertTorrent(hash) // Или client.Convert(hash), в зависимости от вашего API
 		if err != nil {
 			log.Printf("[api] Converting error: %v\n", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
