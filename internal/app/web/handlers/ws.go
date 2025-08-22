@@ -14,7 +14,7 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true }, // Для пет-проекта, в продакшене ограничьте origin
 }
 
-func HandleWebSocket(torrentClient *torrent.Client) http.HandlerFunc {
+func HandleWebSocket(torrentClient *torrent.Service) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if r := recover(); r != nil {

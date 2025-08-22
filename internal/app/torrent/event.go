@@ -14,31 +14,31 @@ type Event struct {
 
 // EventHandler обработчик событий
 type EventHandler struct {
-	stateManager *StateManager
+	service *Service
 }
 
-func NewEventHandler(sm *StateManager) *EventHandler {
+func NewEventHandler(service *Service) *EventHandler {
 	return &EventHandler{
-		stateManager: sm,
+		service: service,
 	}
 }
 
 // Start запускает обработку событий
-func (eh *EventHandler) Start(client *Client) {
+func (eh *EventHandler) Start() {
 	go func() {
-		for event := range eh.stateManager.EventChannel() {
-			eh.handleEvent(event, client)
+		for event := range eh.service.stateManager.EventChannel() {
+			eh.handleEvent(event)
 		}
 	}()
 }
 
-func (eh *EventHandler) handleEvent(event Event, client *Client) {
+func (eh *EventHandler) handleEvent(event Event) {
 	switch event.Type {
 	case "torrent_loaded":
 		log.Printf("Processing torrent: %s", event.Torrent.Name)
 
 		// Добавляем торрент в клиент
-		if _, err := client.Add(event.Torrent.Magnet); err != nil {
+		if _, err := eh.service.AddTorrent(event.Torrent.Magnet); err != nil {
 			log.Printf("Failed to add torrent to client: %v\n", err)
 		} else {
 			log.Printf("Successfully added torrent to client: %s\n", event.Torrent.Name)
@@ -48,18 +48,10 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 		log.Printf("Torrent download completed: %s", event.Torrent.Name)
 
 		// Проверяем, не был ли уже обработан
-		if !eh.stateManager.IsAlreadyProcessed(event.Torrent.InfoHash) {
+		if !eh.service.stateManager.IsAlreadyProcessed(event.Torrent.InfoHash) {
 			// Добавляем в очередь на конвертацию
-			if err := eh.stateManager.MarkAsQueued(event.Torrent.InfoHash); err != nil {
-				log.Printf("Error marking torrent as queued: %v", err)
-			} else {
-				// Добавляем в очередь конвертации
-				select {
-				case eh.stateManager.conversionQueue <- event.Torrent:
-					log.Printf("Added torrent to conversion queue: %s", event.Torrent.Name)
-				default:
-					log.Printf("Conversion queue is full, torrent: %s", event.Torrent.Name)
-				}
+			if err := eh.service.ConvertTorrent(event.Torrent.InfoHash); err != nil {
+				log.Printf("Error queuing torrent for conversion: %v", err)
 			}
 		} else {
 			log.Printf("Torrent already processed: %s", event.Torrent.Name)
@@ -76,11 +68,7 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 
 	case "conversion_completed":
 		log.Printf("Torrent conversion completed: %s", event.Torrent.Name)
-		t, err := client.GetTorrentFromClient(event.Torrent.InfoHash)
-		if err != nil {
-			log.Printf("[event] failed to get torrent from client: %v\n", err)
-		}
-		client.UpdateTorrentVideoFiles(event.Torrent, t)
+		// Video file info is updated on demand, so we don't need to do anything here.
 
 	default:
 		log.Printf("Unknown event type: %s", event.Type)
@@ -89,10 +77,10 @@ func (eh *EventHandler) handleEvent(event Event, client *Client) {
 
 // GetConversionQueue возвращает канал очереди конвертации
 func (eh *EventHandler) GetConversionQueue() <-chan *Torrent {
-	return eh.stateManager.conversionQueue
+	return eh.service.stateManager.conversionQueue
 }
 
 // Stop останавливает обработчик событий
 func (eh *EventHandler) Stop() {
-	close(eh.stateManager.conversionQueue)
+	close(eh.service.stateManager.conversionQueue)
 }

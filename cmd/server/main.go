@@ -73,17 +73,18 @@ func main() {
 	// Хранилище метаданных торрентов
 	pieceCompletionDir := cfg.PieceCompletionDir
 	// Инициализируем торрент-клиент
-	torrentClient, err := torrent.NewClient(clientBaseDir, pieceCompletionDir, torrentStates)
+	torrentClient, err := torrent.NewClient(clientBaseDir, pieceCompletionDir)
 	if err != nil {
 		log.Fatal("Failed to init torrent client:", err)
 	}
 
-	eventHandler := torrent.NewEventHandler(torrentClient.StateManager)
-	// Запускаем обработчик событий
-	eventHandler.Start(torrentClient)
+	sm := torrent.NewTorrentStateManager(torrentStates)
+	torrentService := torrent.NewService(torrentClient, sm)
+	eventHandler := torrent.NewEventHandler(torrentService)
+	eventHandler.Start()
 
 	// Периодически проверяем торренты и обновляем
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	go func() {
 		defer ticker.Stop()
 		for {
@@ -91,7 +92,7 @@ func main() {
 			case <-ticker.C:
 				torrents := torrentClient.GetTorrents()
 				for _, t := range torrents {
-					torrentClient.StateManager.UpdateTorrent(&t)
+					sm.UpdateTorrent(&t)
 				}
 			case <-sigChan:
 				log.Println("Received shutdown signal, stopping torrent monitoring...")
@@ -104,7 +105,7 @@ func main() {
 	go func() {
 		for {
 			select {
-			case t, ok := <-eventHandler.GetConversionQueue():
+			case t, ok := <-sm.GetConversionQueue():
 				if !ok {
 					log.Println("Conversion queue closed, stopping conversion worker...")
 					return
@@ -113,7 +114,7 @@ func main() {
 				log.Printf("Starting conversion for torrent: %s", t.InfoHash)
 
 				// Помечаем как конвертируемый
-				if err := torrentClient.StateManager.MarkAsConverting(t.InfoHash); err != nil {
+				if err := sm.MarkAsConverting(t.InfoHash); err != nil {
 					log.Printf("Failed to mark torrent as converting: %v", err)
 					continue
 				}
@@ -122,12 +123,12 @@ func main() {
 				if err := torrent.ConvertTorrentToHls(cfg, t); err != nil {
 					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
 					// Помечаем как ошибку
-					if markErr := torrentClient.StateManager.MarkAsError(t.InfoHash); markErr != nil {
+					if markErr := sm.MarkAsError(t.InfoHash); markErr != nil {
 						log.Printf("Failed to mark torrent as error: %v", markErr)
 					}
 				} else {
 					// После успешной конвертации
-					if err := torrentClient.StateManager.MarkAsConverted(t.InfoHash); err != nil {
+					if err := sm.MarkAsConverted(t.InfoHash); err != nil {
 						log.Printf("Failed to mark torrent as converted: %v", err)
 					} else {
 						log.Printf("Successfully converted torrent: %s", t.Name)
@@ -155,20 +156,20 @@ func main() {
 	router.Route("/api", func(api chi.Router) {
 		api.Use(middleware.Timeout(30*time.Second), httphelpers.ErrorHandler)
 		api.Route("/torrents", func(r chi.Router) {
-			r.Get("/", handlers.GetTorrentsHandler(torrentClient))
-			r.Post("/", handlers.AddTorrentHandler(torrentClient))
-			r.Get("/{hash}/pause", handlers.PauseTorrentHandler(torrentClient))
-			r.Get("/{hash}/resume", handlers.ResumeTorrentHandler(torrentClient))
-			r.Get("/{hash}", handlers.GetTorrentHandler(torrentClient))
-			r.Delete("/{hash}", handlers.DeleteTorrentHandler(torrentClient))
-			r.Post("/{hash}/convert", handlers.ConvertTorrentHandler(torrentClient))
+			r.Get("/", handlers.GetTorrentsHandler(torrentService))
+			r.Post("/", handlers.AddTorrentHandler(torrentService))
+			r.Get("/{hash}/pause", handlers.PauseTorrentHandler(torrentService))
+			r.Get("/{hash}/resume", handlers.ResumeTorrentHandler(torrentService))
+			r.Get("/{hash}", handlers.GetTorrentHandler(torrentService))
+			r.Delete("/{hash}", handlers.DeleteTorrentHandler(torrentService))
+			r.Post("/{hash}/convert", handlers.ConvertTorrentHandler(torrentService))
 		})
 		api.Get("/files/tree", handlers.GetFilesTreeHandler(cfg))
 		api.Get("/files", handlers.GetFilesHandler(cfg))
 		api.Get("/video", handlers.VideoHandler(cfg))
 		api.Get("/health", handlers.HealthCheck(torrentClient))
 	})
-	router.Get("/ws", handlers.HandleWebSocket(torrentClient))
+	router.Get("/ws", handlers.HandleWebSocket(torrentService))
 	router.Get("/starfield/*", handlers.StarfieldHandler("./web"))
 
 	// Создаем HTTP-сервер
@@ -212,7 +213,7 @@ func main() {
 
 		// Останавливаем компоненты
 		eventHandler.Stop()
-		torrentClient.StateManager.Stop()
+		sm.Stop()
 
 		serverStopCtx()
 	}()

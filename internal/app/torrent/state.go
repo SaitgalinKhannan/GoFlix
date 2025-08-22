@@ -219,11 +219,14 @@ func (sm *StateManager) updateTorrentState(torrent *Torrent) {
 }
 
 // GetTorrent получает торрент по хешу
-func (sm *StateManager) GetTorrent(infoHash string) (*Torrent, bool) {
+func (sm *StateManager) GetTorrent(infoHash string) (*Torrent, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	torrent, exists := sm.states[infoHash]
-	return torrent, exists
+	if !exists {
+		return nil, fmt.Errorf("torrent with infohash %s not found", infoHash)
+	}
+	return torrent, nil
 }
 
 // GetAllTorrents возвращает все торренты
@@ -247,6 +250,20 @@ func (sm *StateManager) UpdateTorrent(torrent *Torrent) {
 	case sm.batchUpdates <- torrent:
 	default:
 		log.Println("Batch updates channel is full")
+	}
+}
+
+// RemoveTorrent removes a torrent from the state manager
+func (sm *StateManager) RemoveTorrent(infoHash string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	delete(sm.states, infoHash)
+
+	// Schedule a save
+	select {
+	case sm.saveChannel <- struct{}{}:
+	default:
 	}
 }
 
@@ -347,13 +364,15 @@ func (sm *StateManager) MarkAsQueued(infoHash string) error {
 	}
 
 	if torrent.ConvertingState >= StateConvertingQueued && torrent.ConvertingState != StateConvertingError {
-		return fmt.Errorf("torrent %s is already queued or processed", infoHash)
+		return nil
 	}
 
 	torrent.ConvertingState = StateConvertingQueued
 	now := time.Now()
 	torrent.ConvertingQueuedAt = &now
 	torrent.LastChecked = now
+
+	sm.conversionQueue <- torrent
 
 	// Сохраняем состояние
 	select {
@@ -474,6 +493,11 @@ func (sm *StateManager) IsAlreadyProcessed(infoHash string) bool {
 // EventChannel возвращает канал событий
 func (sm *StateManager) EventChannel() <-chan Event {
 	return sm.eventChannel
+}
+
+// GetConversionQueue returns the conversion queue channel
+func (sm *StateManager) GetConversionQueue() <-chan *Torrent {
+	return sm.conversionQueue
 }
 
 // Stop останавливает фоновые процессы
