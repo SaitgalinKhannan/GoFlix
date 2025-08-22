@@ -142,7 +142,7 @@ func getDir(rootPath string) (*File, error) {
 }
 
 // GetFilesTree return files tree without root dir
-func GetFilesTree(cfg *configs.Config) (*[]File, error) {
+func GetFilesTree(cfg *configs.Config) ([]File, error) {
 	file, err := buildTree(cfg.TorrentsDir)
 	if err != nil {
 		log.Println(err)
@@ -150,14 +150,14 @@ func GetFilesTree(cfg *configs.Config) (*[]File, error) {
 	}
 
 	if file.Children != nil {
-		return &file.Children, nil
+		return file.Children, nil
 	} else {
-		return nil, nil
+		return []File{}, nil
 	}
 }
 
 // GetFiles return files without root dir
-func GetFiles(rootPath string) (*[]File, error) {
+func GetFiles(rootPath string) ([]File, error) {
 	file, err := getDir(rootPath)
 	if err != nil {
 		log.Println(err)
@@ -165,8 +165,8 @@ func GetFiles(rootPath string) (*[]File, error) {
 	}
 
 	if file.Children != nil {
-		return &file.Children, nil
+		return file.Children, nil
 	} else {
-		return nil, nil
+		return []File{}, nil
 	}
 }
