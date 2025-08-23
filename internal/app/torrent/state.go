@@ -372,8 +372,6 @@ func (sm *StateManager) MarkAsQueued(infoHash string) error {
 	torrent.ConvertingQueuedAt = &now
 	torrent.LastChecked = now
 
-	sm.conversionQueue <- torrent
-
 	// Сохраняем состояние
 	select {
 	case sm.saveChannel <- struct{}{}:
