@@ -30,22 +30,21 @@ func (s *Service) AddTorrent(magnet string) (string, error) {
 // GetTorrents returns a list of all torrents (active and inactive).
 func (s *Service) GetTorrents() []Torrent {
 	activeTorrents := s.client.GetTorrents()
-
 	// Use a map to merge active torrents with stored states
 	torrentsMap := s.stateManager.GetAllTorrents()
 
 	for _, t := range activeTorrents {
-		// Update existing torrent from state or add if not present
 		if existing, ok := torrentsMap[t.InfoHash]; ok {
-			// Update fields from active torrent
+			// Обновляем поля
 			existing.DownloadedPercent = t.DownloadedPercent
 			existing.Done = t.Done
-			if !existing.Done {
-				existing.State = StateDownloading
-			}
+			existing.State = t.State
+
+			s.stateManager.UpdateTorrent(existing)
 			torrentsMap[t.InfoHash] = existing
 		} else {
 			torrentsMap[t.InfoHash] = &t
+			s.stateManager.UpdateTorrent(&t)
 		}
 	}
 
@@ -72,11 +71,13 @@ func (s *Service) GetTorrents() []Torrent {
 func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 	// First, check the state manager
 	t, err := s.stateManager.GetTorrent(infoHash)
+
 	if err == nil {
 		// If it's also active in the client, update its status
 		if activeTorrent, err := s.client.GetTorrent(infoHash); err == nil && activeTorrent != nil {
 			t.DownloadedPercent = activeTorrent.DownloadedPercent
 			t.Done = activeTorrent.Done
+			t.State = activeTorrent.State
 		}
 
 		// обновление информации о видео файлах
@@ -92,7 +93,10 @@ func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 	}
 
 	// обновление информации о видео файлах
-	s.updateTorrentVideoFiles(t)
+	s.updateTorrentVideoFiles(torrent) // Change t to torrent
+
+	// update torrent in stateManager
+	s.stateManager.UpdateTorrent(t)
 
 	return torrent, nil
 }

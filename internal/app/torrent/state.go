@@ -203,7 +203,7 @@ func (sm *StateManager) updateTorrentState(torrent *Torrent) {
 			Torrent:   torrent,
 			Timestamp: now,
 		}
-
+		log.Printf("DEBUG: event: %s", event.Type)
 		select {
 		case sm.eventChannel <- event:
 		default:
@@ -228,7 +228,8 @@ func (sm *StateManager) GetTorrent(infoHash string) (*Torrent, error) {
 	if !exists {
 		return nil, fmt.Errorf("torrent with infohash %s not found", infoHash)
 	}
-	return torrent, nil
+	torrentCopy := *torrent
+	return &torrentCopy, nil
 }
 
 // GetAllTorrents возвращает все торренты
@@ -238,7 +239,8 @@ func (sm *StateManager) GetAllTorrents() map[string]*Torrent {
 
 	result := make(map[string]*Torrent, len(sm.states))
 	for k, v := range sm.states {
-		result[k] = v
+		torrentCopy := *v
+		result[k] = &torrentCopy
 	}
 
 	return result
@@ -542,4 +544,18 @@ func (sm *StateManager) RemoveFromConversionQueue(t *Torrent) {
 	defer sm.queueMu.Unlock()
 
 	delete(sm.queuedTorrents, t.InfoHash)
+}
+
+func (sm *StateManager) MarkTorrentCompleted(torrent *Torrent) {
+	event := Event{
+		Type:      "download_completed",
+		Torrent:   torrent,
+		Timestamp: time.Now(),
+	}
+
+	select {
+	case sm.eventChannel <- event:
+	default:
+		log.Println("Event channel is full, dropping event")
+	}
 }
