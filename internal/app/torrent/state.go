@@ -28,6 +28,8 @@ type StateManager struct {
 
 	// Очередь на конвертацию
 	conversionQueue chan *Torrent
+	queuedTorrents  map[string]struct{} // Используем ID торрента как ключ
+	queueMu         sync.Mutex          // Мьютекс для защиты queuedTorrents
 }
 
 // NewTorrentStateManager создает новый менеджер состояний
@@ -509,4 +511,35 @@ func (sm *StateManager) Stop() {
 	}
 
 	close(sm.eventChannel)
+}
+
+func (sm *StateManager) AddToConversionQueue(t *Torrent) error {
+	sm.queueMu.Lock()
+	defer sm.queueMu.Unlock()
+
+	// Проверяем, есть ли торрент уже в очереди
+	if _, exists := sm.queuedTorrents[t.InfoHash]; exists {
+		return fmt.Errorf("the torrent is already in the queue")
+	}
+
+	// Добавляем торрент в мапу отслеживания
+	sm.queuedTorrents[t.InfoHash] = struct{}{}
+
+	// Отправляем торрент в канал для обработки
+	select {
+	case sm.conversionQueue <- t:
+		log.Printf("Added torrent to conversion queue: %s", t.Name)
+	default:
+		log.Printf("Conversion queue is full, torrent: %s", t.Name)
+		return fmt.Errorf("conversion queue is full")
+	}
+
+	return nil
+}
+
+func (sm *StateManager) RemoveFromConversionQueue(t *Torrent) {
+	sm.queueMu.Lock()
+	defer sm.queueMu.Unlock()
+
+	delete(sm.queuedTorrents, t.InfoHash)
 }

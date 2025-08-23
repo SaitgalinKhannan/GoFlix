@@ -51,7 +51,7 @@ func main() {
 		// Файл не существует — создаём его
 		file, createErr := os.Create(torrentStates)
 		if createErr != nil {
-			panic("Не удалось создать файл: " + createErr.Error())
+			panic("не удалось создать файл: " + createErr.Error())
 		}
 
 		defer filehelpers.CloseFile(file)
@@ -60,7 +60,7 @@ func main() {
 		encoder := json.NewEncoder(file)
 		encodeErr := encoder.Encode(map[string]interface{}{})
 		if encodeErr != nil {
-			panic("Не удалось записать JSON в файл: " + encodeErr.Error())
+			panic("не удалось записать JSON в файл: " + encodeErr.Error())
 		}
 
 		log.Println("Файл", torrentStates, "создан.")
@@ -135,6 +135,8 @@ func main() {
 					}
 				}
 
+				// remove from queue
+				sm.RemoveFromConversionQueue(t)
 			case <-sigChan:
 				log.Println("Received shutdown signal, stopping conversion worker...")
 				return

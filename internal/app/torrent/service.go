@@ -153,7 +153,7 @@ func (s *Service) ConvertTorrent(infoHash string) error {
 }
 
 func (s *Service) ConvertTorrentToHls(t *Torrent) error {
-	if t.VideoFiles == nil || len(t.VideoFiles) == 0 {
+	if len(t.VideoFiles) == 0 {
 		s.updateTorrentVideoFiles(t)
 	}
 
