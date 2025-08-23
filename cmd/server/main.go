@@ -120,7 +120,7 @@ func main() {
 				}
 
 				// Выполняем конвертацию
-				if err := torrent.ConvertTorrentToHls(cfg, t); err != nil {
+				if err := torrentService.ConvertTorrentToHls(t); err != nil {
 					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
 					// Помечаем как ошибку
 					if markErr := sm.MarkAsError(t.InfoHash); markErr != nil {

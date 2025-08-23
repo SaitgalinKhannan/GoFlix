@@ -1,8 +1,11 @@
 package torrent
 
 import (
+	"GoFlix/internal/app/media"
+	"GoFlix/internal/pkg/filehelpers"
 	"fmt"
 	"log"
+	"path/filepath"
 )
 
 // Service handles the business logic for managing torrents.
@@ -144,6 +147,31 @@ func (s *Service) ConvertTorrent(infoHash string) error {
 	default:
 		log.Printf("Conversion queue is full, torrent: %s", torrent.Name)
 		return fmt.Errorf("conversion queue is full")
+	}
+
+	return nil
+}
+
+func (s *Service) ConvertTorrentToHls(t *Torrent) error {
+	if t.VideoFiles == nil || len(t.VideoFiles) == 0 {
+		s.updateTorrentVideoFiles(t)
+	}
+
+	if t.VideoFiles != nil {
+		for _, f := range t.VideoFiles {
+			if !filehelpers.IsVideoFile(f.Path) {
+				continue
+			}
+
+			abs, err := filepath.Abs(f.Path)
+			if err != nil {
+				return err
+			}
+			err = media.ConvertToHls(abs)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
 	return nil
