@@ -35,12 +35,14 @@ func (s *Service) GetTorrents() []Torrent {
 
 	for _, t := range activeTorrents {
 		if existing, ok := torrentsMap[t.InfoHash]; ok {
-			// Обновляем поля
-			existing.DownloadedPercent = t.DownloadedPercent
-			existing.Done = t.Done
-			existing.State = t.State
+			// Обновляем поля, если они отличаются
+			if existing.DownloadedPercent != t.DownloadedPercent || existing.Done != t.Done || existing.State != t.State {
+				existing.DownloadedPercent = t.DownloadedPercent
+				existing.Done = t.Done
+				existing.State = t.State
+				s.stateManager.UpdateTorrent(existing)
+			}
 
-			s.stateManager.UpdateTorrent(existing)
 			torrentsMap[t.InfoHash] = existing
 		} else {
 			torrentsMap[t.InfoHash] = &t

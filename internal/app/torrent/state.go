@@ -37,11 +37,11 @@ func NewTorrentStateManager(stateFile string) *StateManager {
 	sm := &StateManager{
 		states:          make(map[string]*Torrent),
 		stateFile:       stateFile,
-		eventChannel:    make(chan Event, 100),
+		eventChannel:    make(chan Event, 1000),
 		saveChannel:     make(chan struct{}, 1),
-		batchUpdates:    make(chan *Torrent, 100),
+		batchUpdates:    make(chan *Torrent, 1000),
 		stopChan:        make(chan struct{}),
-		conversionQueue: make(chan *Torrent, 100),
+		conversionQueue: make(chan *Torrent, 1000),
 	}
 
 	// Загружаем существующие состояния
