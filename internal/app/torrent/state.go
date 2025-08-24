@@ -42,6 +42,7 @@ func NewTorrentStateManager(stateFile string) *StateManager {
 		batchUpdates:    make(chan *Torrent, 1000),
 		stopChan:        make(chan struct{}),
 		conversionQueue: make(chan *Torrent, 1000),
+		queuedTorrents:  make(map[string]struct{}),
 	}
 
 	// Загружаем существующие состояния
@@ -234,11 +235,17 @@ func (sm *StateManager) GetTorrent(infoHash string) (*Torrent, error) {
 
 // GetAllTorrents возвращает все торренты
 func (sm *StateManager) GetAllTorrents() map[string]*Torrent {
+	// Take a quick snapshot of pointers under the read lock
 	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	result := make(map[string]*Torrent, len(sm.states))
+	snapshot := make(map[string]*Torrent, len(sm.states))
 	for k, v := range sm.states {
+		snapshot[k] = v
+	}
+	sm.mu.RUnlock()
+
+	// Copy values outside of the lock to avoid writer starvation
+	result := make(map[string]*Torrent, len(snapshot))
+	for k, v := range snapshot {
 		torrentCopy := *v
 		result[k] = &torrentCopy
 	}
@@ -253,7 +260,8 @@ func (sm *StateManager) UpdateTorrent(torrent *Torrent) {
 	select {
 	case sm.batchUpdates <- torrent:
 	default:
-		log.Println("Batch updates channel is full")
+		// Fallback: process synchronously to avoid dropping updates and log spam
+		sm.updateTorrentState(torrent)
 	}
 }
 

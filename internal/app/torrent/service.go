@@ -36,13 +36,13 @@ func (s *Service) GetTorrents() []Torrent {
 	for _, t := range activeTorrents {
 		if existing, ok := torrentsMap[t.InfoHash]; ok {
 			// Обновляем поля, если они отличаются
-			if existing.DownloadedPercent != t.DownloadedPercent || existing.Done != t.Done || existing.State != t.State {
+			if existing.DownloadedPercent != t.DownloadedPercent || existing.Done != t.Done ||
+				existing.State != t.State {
 				existing.DownloadedPercent = t.DownloadedPercent
 				existing.Done = t.Done
 				existing.State = t.State
 				s.stateManager.UpdateTorrent(existing)
 			}
-
 			torrentsMap[t.InfoHash] = existing
 		} else {
 			torrentsMap[t.InfoHash] = &t
@@ -55,13 +55,8 @@ func (s *Service) GetTorrents() []Torrent {
 
 	for _, t := range torrentsMap {
 		if t.Done && t.VideoFiles == nil {
-			info, err := s.client.GetTorrentVideoFilesInfo(t)
-			if err != nil {
-				fmt.Println(err)
-			}
-			if info != nil {
-				t.VideoFiles = info
-			}
+			s.updateTorrentVideoFiles(t)
+			s.stateManager.UpdateTorrent(t)
 		}
 		torrents = append(torrents, *t)
 	}
@@ -76,7 +71,9 @@ func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 
 	if err == nil {
 		// If it's also active in the client, update its status
-		if activeTorrent, err := s.client.GetTorrent(infoHash); err == nil && activeTorrent != nil {
+		activeTorrent, errGetActiveTorrent := s.client.GetTorrent(infoHash)
+		changed := activeTorrent != nil && (t.DownloadedPercent != activeTorrent.DownloadedPercent || t.Done != activeTorrent.Done || t.State != activeTorrent.State)
+		if errGetActiveTorrent == nil && changed {
 			t.DownloadedPercent = activeTorrent.DownloadedPercent
 			t.Done = activeTorrent.Done
 			t.State = activeTorrent.State
@@ -84,6 +81,8 @@ func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 
 		// обновление информации о видео файлах
 		s.updateTorrentVideoFiles(t)
+		// update torrent in stateManager
+		s.stateManager.UpdateTorrent(t)
 
 		return t, nil
 	}
@@ -95,10 +94,9 @@ func (s *Service) GetTorrent(infoHash string) (*Torrent, error) {
 	}
 
 	// обновление информации о видео файлах
-	s.updateTorrentVideoFiles(torrent) // Change t to torrent
-
+	s.updateTorrentVideoFiles(torrent) // Ensure we update info for the found torrent
 	// update torrent in stateManager
-	s.stateManager.UpdateTorrent(t)
+	s.stateManager.UpdateTorrent(torrent)
 
 	return torrent, nil
 }
