@@ -101,7 +101,7 @@ func (c *Client) toTorrent(t *torrent.Torrent) (*Torrent, error) {
 	metaInfo := t.Metainfo()
 	magnet, err := metaInfo.MagnetV2()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get magnet link: %w", err)
+		return nil, fmt.Errorf("failed to get magnet link: %s: %w", t.Name(), err)
 	}
 
 	infoHash := t.InfoHash().String()

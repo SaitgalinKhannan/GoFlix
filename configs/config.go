@@ -12,6 +12,8 @@ type Config struct {
 	TorrentsStatesFile string
 	TorrentsDir        string
 	PieceCompletionDir string
+	DBURL              string // e.g., "postgres://user:pass@localhost/db"
+	JWTSecret          string
 }
 
 func LoadConfig() (*Config, error) {

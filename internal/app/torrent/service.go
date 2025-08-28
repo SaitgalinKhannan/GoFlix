@@ -5,7 +5,9 @@ import (
 	"GoFlix/internal/pkg/filehelpers"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
+	"time"
 )
 
 // Service handles the business logic for managing torrents.
@@ -193,4 +195,67 @@ func (s *Service) updateTorrentVideoFiles(t *Torrent) {
 			t.VideoFiles = info
 		}
 	}
+}
+
+func (s *Service) StartBackgroundWorkers(sigChan chan os.Signal) {
+	// Периодически проверяем торренты и обновляем
+	ticker := time.NewTicker(30 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				torrents := s.GetTorrents()
+				for _, t := range torrents {
+					s.stateManager.UpdateTorrent(&t)
+				}
+			case <-sigChan:
+				log.Println("Received shutdown signal, stopping torrent monitoring...")
+				return
+			}
+		}
+	}()
+
+	// Обрабатываем очередь конвертации
+	go func() {
+		for {
+			select {
+			case t, ok := <-s.stateManager.GetConversionQueue():
+				if !ok {
+					log.Println("Conversion queue closed, stopping conversion worker...")
+					return
+				}
+
+				log.Printf("Starting conversion for torrent: %s", t.InfoHash)
+
+				// Помечаем как конвертируемый
+				if err := s.stateManager.MarkAsConverting(t.InfoHash); err != nil {
+					log.Printf("Failed to mark torrent as converting: %v", err)
+					continue
+				}
+
+				// Выполняем конвертацию
+				if err := s.ConvertTorrentToHls(t); err != nil {
+					log.Printf("Failed to convert torrent %s: %v", t.InfoHash, err)
+					// Помечаем как ошибку
+					if markErr := s.stateManager.MarkAsError(t.InfoHash); markErr != nil {
+						log.Printf("Failed to mark torrent as error: %v", markErr)
+					}
+				} else {
+					// После успешной конвертации
+					if err := s.stateManager.MarkAsConverted(t.InfoHash); err != nil {
+						log.Printf("Failed to mark torrent as converted: %v", err)
+					} else {
+						log.Printf("Successfully converted torrent: %s", t.Name)
+					}
+				}
+
+				// remove from queue
+				s.stateManager.RemoveFromConversionQueue(t)
+			case <-sigChan:
+				log.Println("Received shutdown signal, stopping conversion worker...")
+				return
+			}
+		}
+	}()
 }

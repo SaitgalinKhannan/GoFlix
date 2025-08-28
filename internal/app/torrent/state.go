@@ -567,3 +567,28 @@ func (sm *StateManager) MarkTorrentCompleted(torrent *Torrent) {
 		log.Println("Event channel is full, dropping event")
 	}
 }
+
+func InitTorrentStatesFile(torrentStatesPath string) error {
+	// Проверяем, существует ли файл
+	if _, err := os.Stat(torrentStatesPath); os.IsNotExist(err) {
+		// Файл не существует — создаём его
+		file, createErr := os.Create(torrentStatesPath)
+		if createErr != nil {
+			return createErr
+		}
+
+		defer filehelpers.CloseFile(file)
+
+		// Записываем пустой JSON-объект: {}
+		encoder := json.NewEncoder(file)
+		if encodeErr := encoder.Encode(map[string]interface{}{}); encodeErr != nil {
+			return encodeErr
+		}
+
+		log.Println("Файл", torrentStatesPath, "создан.")
+	} else {
+		log.Println("Файл", torrentStatesPath, "уже существует.")
+	}
+
+	return nil
+}
