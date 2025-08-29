@@ -1,6 +1,7 @@
 package media
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -42,6 +43,10 @@ func CopyToHls(path string) error {
 }
 
 func ConvertToHls(path string) error {
+	// Создаем контекст с таймаутом
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Важно вызвать cancel, чтобы освободить ресурсы
+
 	fileExt := filepath.Ext(path)
 	filePathWithoutExt := strings.TrimSuffix(path, fileExt)
 
@@ -56,13 +61,13 @@ func ConvertToHls(path string) error {
 		return err
 	}
 
-	cmd := exec.Command("ffmpeg", args...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Dir = filePathWithoutExt // Устанавливаем рабочую директорию для команды
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("[ffmpeg] Failed to convert %s to hls: %s\n", filePathWithoutExt, err)
+	if runErr := cmd.Run(); runErr != nil {
+		return fmt.Errorf("[ffmpeg] Failed to convert %s to hls: %s\n", filePathWithoutExt, runErr)
 	}
 
 	return nil
