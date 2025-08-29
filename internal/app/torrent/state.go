@@ -28,8 +28,8 @@ type StateManager struct {
 
 	// Очередь на конвертацию
 	conversionQueue chan *Torrent
-	queuedTorrents  map[string]struct{} // Используем ID торрента как ключ
-	queueMu         sync.Mutex          // Мьютекс для защиты queuedTorrents
+	queuedTorrents  map[string]struct{}
+	queueMu         sync.Mutex
 }
 
 // NewTorrentStateManager создает новый менеджер состояний
@@ -243,7 +243,7 @@ func (sm *StateManager) GetAllTorrents() map[string]*Torrent {
 	}
 	sm.mu.RUnlock()
 
-	// Copy values outside of the lock to avoid writer starvation
+	// Copy values outside the lock to avoid writer starvation
 	result := make(map[string]*Torrent, len(snapshot))
 	for k, v := range snapshot {
 		torrentCopy := *v
