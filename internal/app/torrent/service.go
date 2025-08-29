@@ -199,15 +199,25 @@ func (s *Service) updateTorrentVideoFiles(t *Torrent) {
 
 func (s *Service) StartBackgroundWorkers(sigChan chan os.Signal) {
 	// Периодически проверяем торренты и обновляем
-	ticker := time.NewTicker(30 * time.Second)
 	go func() {
+		// дождёмся первоначальной паузы или выхода по сигналу
+		select {
+		case <-time.After(30 * time.Second):
+			// продолжим — первая проверка через 30s
+		case <-sigChan:
+			log.Println("Shutdown before first torrent check")
+			return
+		}
+
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ticker.C:
 				torrents := s.GetTorrents()
-				for _, t := range torrents {
-					s.stateManager.UpdateTorrent(&t)
+				for i := range torrents {
+					s.stateManager.UpdateTorrent(&torrents[i])
 				}
 			case <-sigChan:
 				log.Println("Received shutdown signal, stopping torrent monitoring...")
