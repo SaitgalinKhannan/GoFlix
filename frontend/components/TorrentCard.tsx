@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { deleteTorrent, startSeeding, stopSeeding } from "@/lib/api";
-import { formatBytes, formatPercent, formatSpeed } from "@/lib/format";
+import { formatBytes, formatEta, formatPercent, formatSpeed } from "@/lib/format";
 import type { TorrentStatus } from "@/lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -88,6 +88,11 @@ export default function TorrentCard({
         <span>
           ↑ <span className="text-gray-200">{formatSpeed(torrent.uploadSpeed)}</span>
         </span>
+        {torrent.status === "downloading" && torrent.eta > 0 && (
+          <span>
+            ⏳ <span className="text-gray-200">{formatEta(torrent.eta)}</span>
+          </span>
+        )}
       </div>
 
       {torrent.error && (

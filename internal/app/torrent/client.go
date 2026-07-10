@@ -333,6 +333,12 @@ func (c *Client) Statuses() []TorrentStatus {
 			status = StatusPaused
 		}
 
+		// ETA: seconds remaining, based on the smoothed speed.
+		var eta int64
+		if status == StatusDownloading && dlSpeed > 0 && size > completed {
+			eta = (size - completed) / dlSpeed
+		}
+
 		out = append(out, TorrentStatus{
 			ID:            infoHash,
 			InfoHash:      infoHash,
@@ -341,6 +347,7 @@ func (c *Client) Statuses() []TorrentStatus {
 			Progress:      progress,
 			DownloadSpeed: dlSpeed,
 			UploadSpeed:   ulSpeed,
+			Eta:           eta,
 			Size:          size,
 			Downloaded:    downloaded,
 		})

@@ -21,6 +21,7 @@ export interface TorrentStatus {
   progress: number; // 0..1
   downloadSpeed: number; // bytes/s
   uploadSpeed: number; // bytes/s
+  eta: number; // seconds remaining (0 = done/unknown)
   size: number; // bytes
   downloaded: number; // bytes
   addedAt: string; // ISO 8601
