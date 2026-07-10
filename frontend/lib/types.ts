@@ -1,5 +1,6 @@
 export type TorrentStatusValue =
   | "metadata"
+  | "checking"
   | "queued"
   | "downloading"
   | "seeding"

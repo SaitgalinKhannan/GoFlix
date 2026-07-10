@@ -68,6 +68,7 @@ func (s *Server) SetupRouter() http.Handler {
 			r.Delete("/{id}", handlers.DeleteTorrentHandler(s.torrentService))
 			r.Post("/{id}/start", handlers.StartSeedingHandler(s.torrentService))
 			r.Post("/{id}/stop", handlers.StopSeedingHandler(s.torrentService))
+			r.Post("/{id}/recheck", handlers.RecheckHandler(s.torrentService))
 		})
 
 		v1.Get("/events", handlers.SSEHandler(s.torrentService))

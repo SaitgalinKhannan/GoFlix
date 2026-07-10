@@ -153,3 +153,11 @@ export async function stopSeeding(id: string): Promise<void> {
   const res = await authedFetch(`/api/v1/torrents/${id}/stop`, { method: "POST" });
   if (!res.ok) throw new Error(`stop failed: ${res.status}`);
 }
+
+export async function recheckTorrent(id: string): Promise<void> {
+  const res = await authedFetch(`/api/v1/torrents/${id}/recheck`, { method: "POST" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `recheck failed: ${res.status}`);
+  }
+}

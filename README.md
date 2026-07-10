@@ -84,7 +84,7 @@ All config is environment-driven (see `.env.example`):
 | `PORT`                    | `8081`                           | torrent-service listen port                             |
 | `DATA_DIR`                | `./data`                         | Host folder bind-mounted into the containers (downloads + state). Use an absolute path. |
 | `TORRENTS_DIR`            | `/app/data/torrents`            | Where downloaded media is written (inside the container) |
-| `PIECE_COMPLETION_DIR`    | `/app/data/torrent_data`        | anacrolix piece-completion store                         |
+| `PIECE_COMPLETION_DIR`    | `/app/data/torrent_data`        | Legacy setting (completion is rebuilt by startup recheck) |
 | `TORRENTS_STATES_FILE`    | `/app/data/torrent_states.json` | Persisted torrent list (for resume after restart)        |
 | `JWT_SECRET`              | _(required)_                     | Secret signing JWTs (`openssl rand -hex 32`)             |
 | `AUTH_USERNAME`           | _(required)_                     | Username for the UI login                                |
@@ -109,6 +109,7 @@ GET    /api/v1/torrents/{id}         → 200 TorrentStatus (with files[])
 DELETE /api/v1/torrents/{id}         ?deleteFiles=true → 204
 POST   /api/v1/torrents/{id}/start   → 200   (resume downloading/seeding)
 POST   /api/v1/torrents/{id}/stop    → 200   (stop, files preserved)
+POST   /api/v1/torrents/{id}/recheck → 202   (queue full piece hash verification)
 GET    /api/v1/events                Server-Sent Events: live TorrentStatus[] stream
 ```
 

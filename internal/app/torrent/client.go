@@ -26,9 +26,10 @@ type Client struct {
 	baseDir         string
 	pieceCompletion storage.PieceCompletion
 
-	mu      sync.Mutex
-	samples map[string]*speedTracker // keyed by infoHash
-	paused  map[string]bool          // infoHash → paused (DisallowData* called)
+	mu       sync.Mutex
+	samples  map[string]*speedTracker // keyed by infoHash
+	paused   map[string]bool          // infoHash → paused (DisallowData* called)
+	checking map[string]bool          // infoHash → local data is being hash-checked
 }
 
 // speedTracker smooths download/upload speed using exponential moving average,
@@ -97,11 +98,9 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 		return nil, err
 	}
 
-	// Use an in-memory piece completion (MapPieceCompletion) instead of the
-	// default bolt DB. The bolt DB uses NoSync=true which loses piece state on
-	// restart, causing torrents to appear to restart from zero. With an in-memory
-	// store, anacrolix re-hashes existing files on add — correctly detecting
-	// already-downloaded pieces. This makes resume reliable across restarts.
+	// Avoid carrying stale completion flags across restarts. The service runs an
+	// explicit VerifyDataContext pass for every restored torrent before it lets
+	// the torrent transfer data again.
 	pieceCompletion := storage.NewMapPieceCompletion()
 
 	opts := storage.NewFileClientOpts{
@@ -123,6 +122,7 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 		pieceCompletion: pieceCompletion,
 		samples:         make(map[string]*speedTracker),
 		paused:          make(map[string]bool),
+		checking:        make(map[string]bool),
 	}, nil
 }
 
@@ -207,6 +207,12 @@ func (c *Client) StartSeeding(magnet string) (infoHash string, err error) {
 	case <-time.After(60 * time.Second):
 		return "", errors.New("timed out waiting for torrent metadata")
 	}
+	c.mu.Lock()
+	checking := c.checking[t.InfoHash().String()]
+	c.mu.Unlock()
+	if checking {
+		return "", fmt.Errorf("torrent %s is being checked", t.InfoHash())
+	}
 	t.AllowDataDownload()
 	t.AllowDataUpload()
 	t.DownloadAll()
@@ -246,6 +252,7 @@ func (c *Client) dropTorrent(infoHash string) {
 	}
 	c.mu.Lock()
 	delete(c.paused, infoHash)
+	delete(c.checking, infoHash)
 	c.mu.Unlock()
 }
 
@@ -253,6 +260,60 @@ func (c *Client) dropTorrent(infoHash string) {
 // MUST be called with c.mu already held (Statuses uses it inside its lock).
 func (c *Client) isPaused(infoHash string) bool {
 	return c.paused[infoHash]
+}
+
+// recheck forces a full piece-by-piece hash verification of local data. The
+// torrent remains paused when this returns; the service decides whether it
+// should resume based on the latest persisted user preference.
+func (c *Client) recheck(ctx context.Context, expectedInfoHash, magnet string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t, err := c.tClient.AddMagnet(magnet)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("failed to add torrent: %s", magnet)
+	}
+	infoHash := t.InfoHash().String()
+	if infoHash != expectedInfoHash {
+		return fmt.Errorf("magnet infohash %s does not match stored infohash %s", infoHash, expectedInfoHash)
+	}
+
+	c.mu.Lock()
+	if c.checking[infoHash] {
+		c.mu.Unlock()
+		return fmt.Errorf("torrent %s is already being checked", infoHash)
+	}
+	c.checking[infoHash] = true
+	c.paused[infoHash] = true
+	delete(c.samples, infoHash)
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.checking, infoHash)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			delete(c.paused, infoHash)
+		} else {
+			c.paused[infoHash] = true
+		}
+		c.mu.Unlock()
+	}()
+
+	// Hashing data while peers are writing it can produce false negatives.
+	t.DisallowDataDownload()
+	t.DisallowDataUpload()
+
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(60 * time.Second):
+		return errors.New("timed out waiting for torrent metadata")
+	}
+
+	return t.VerifyDataContext(ctx)
 }
 
 // DeleteFiles removes the torrent's downloaded data from disk.
@@ -332,6 +393,9 @@ func (c *Client) Statuses() []TorrentStatus {
 		// A paused torrent stays in the client but shouldn't show as active.
 		if c.isPaused(infoHash) {
 			status = StatusPaused
+		}
+		if c.checking[infoHash] {
+			status = StatusChecking
 		}
 
 		// ETA: seconds remaining, based on the smoothed speed.

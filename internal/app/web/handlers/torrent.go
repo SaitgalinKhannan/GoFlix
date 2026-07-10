@@ -157,6 +157,22 @@ func StopSeedingHandler(service *torrent.Service) http.HandlerFunc {
 	}
 }
 
+// RecheckHandler forces a full re-hash of a torrent's existing data.
+func RecheckHandler(service *torrent.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := chi.URLParam(r, "id")
+		if id == "" {
+			http.Error(w, "Missing or invalid id parameter", http.StatusBadRequest)
+			return
+		}
+		if err := service.Recheck(id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}
+}
+
 // saveTorrentFile writes an uploaded .torrent to a temp file and returns its path + magnet.
 func saveTorrentFile(src io.Reader, filename string) (path, magnet string, err error) {
 	tmp, err := os.CreateTemp("", "goflix-*.torrent")

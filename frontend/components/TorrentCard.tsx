@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { deleteTorrent, startSeeding, stopSeeding } from "@/lib/api";
+import { deleteTorrent, recheckTorrent, startSeeding, stopSeeding } from "@/lib/api";
 import { formatBytes, formatEta, formatPercent, formatSpeed } from "@/lib/format";
 import type { TorrentStatus } from "@/lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
   metadata: "text-amber-400 bg-amber-400/10",
+  checking: "text-cyan-300 bg-cyan-400/10",
   queued: "text-gray-400 bg-white/10",
   downloading: "text-blue-400 bg-blue-400/10",
   seeding: "text-emerald-400 bg-emerald-400/10",
@@ -27,6 +28,7 @@ export default function TorrentCard({
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const checking = torrent.status === "checking";
   const active = torrent.status === "downloading" || torrent.status === "seeding";
 
   const act = async (fn: () => Promise<void>) => {
@@ -101,7 +103,7 @@ export default function TorrentCard({
 
       {/* Actions */}
       <div className="mt-4 flex flex-wrap gap-2">
-        {active ? (
+        {active || checking ? (
           <button
             onClick={() => act(() => stopSeeding(torrent.id))}
             disabled={busy}
@@ -118,6 +120,14 @@ export default function TorrentCard({
             Start
           </button>
         )}
+        <button
+          onClick={() => act(() => recheckTorrent(torrent.id))}
+          disabled={busy || checking}
+          title="Verify downloaded data"
+          className="rounded-lg border border-cyan-400/25 px-3 py-1.5 text-xs text-cyan-200 transition hover:bg-cyan-400/10 disabled:opacity-50"
+        >
+          {checking ? "Checking..." : "Recheck"}
+        </button>
         <button
           onClick={() => {
             setDeleteFiles(false);
