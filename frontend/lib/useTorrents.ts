@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { API_BASE, getAccessToken, listTorrents, refresh } from "./api";
+import { API_BASE, getAccessToken, listTorrents, refresh as refreshTokens } from "./api";
 import type { TorrentStatus } from "./types";
 
 /**
@@ -60,7 +60,7 @@ export function useTorrents(enabled: boolean, onAuthError?: () => void) {
         if (res.status === 401) {
           // Try a token refresh; if it fails, surface the auth error.
           try {
-            await refresh();
+            await refreshTokens();
             throw new Error("retry"); // reopen with the fresh token
           } catch {
             onAuthError?.();

@@ -110,6 +110,10 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 
 	config := torrent.NewDefaultClientConfig()
 	config.DefaultStorage = storage.NewFileOpts(opts)
+	// anacrolix defaults Seed to false, which stops altruistic uploads once a
+	// torrent no longer needs data. GoFlix keeps completed torrents available
+	// until the user explicitly stops them.
+	config.Seed = true
 
 	tClient, err := torrent.NewClient(config)
 	if err != nil {
@@ -346,8 +350,12 @@ func (c *Client) sampleSpeeds() {
 			tracker = newSpeedTracker()
 			c.samples[infoHash] = tracker
 		}
-		uploaded := t.Stats().BytesWrittenData
-		tracker.record(t.BytesCompleted(), uploaded.Int64(), now)
+		stats := t.Stats()
+		tracker.record(
+			stats.BytesReadUsefulData.Int64(),
+			stats.BytesWrittenData.Int64(),
+			now,
+		)
 	}
 }
 
