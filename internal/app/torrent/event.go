@@ -1,86 +1,67 @@
 package torrent
 
 import (
+	"bytes"
+	"context"
 	"log"
+	"net/http"
 	"time"
 )
 
-// Event TorrentEvent событие торрента
-type Event struct {
-	Type      string    `json:"type"`
-	Torrent   *Torrent  `json:"torrent"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-// EventHandler обработчик событий
+// EventHandler reacts to torrent lifecycle events.
+// Currently it only fires the Jellyfin library-refresh hook on completion.
 type EventHandler struct {
-	service *Service
+	sm            *StateManager
+	jellyfinURL   string
+	jellyfinToken string
 }
 
-func NewEventHandler(service *Service) *EventHandler {
+// NewEventHandler creates a new event handler. Empty jellyfinURL/token disables the hook.
+func NewEventHandler(sm *StateManager, jellyfinURL, jellyfinToken string) *EventHandler {
 	return &EventHandler{
-		service: service,
+		sm:            sm,
+		jellyfinURL:   jellyfinURL,
+		jellyfinToken: jellyfinToken,
 	}
 }
 
-// Start запускает обработку событий
+// Start consumes completion events and triggers the Jellyfin hook.
+// Returns when the state manager's CompletedChan is closed (on shutdown).
 func (eh *EventHandler) Start() {
 	go func() {
-		for event := range eh.service.stateManager.EventChannel() {
-			eh.handleEvent(event)
+		for t := range eh.sm.CompletedChan() {
+			log.Printf("Torrent download completed: %s", t.Name)
+			eh.refreshJellyfin()
 		}
 	}()
 }
 
-func (eh *EventHandler) handleEvent(event Event) {
-	switch event.Type {
-	case "torrent_loaded":
-		log.Printf("Processing torrent: %s", event.Torrent.Name)
-
-		// Добавляем торрент в клиент
-		if _, err := eh.service.AddTorrent(event.Torrent.Magnet); err != nil {
-			log.Printf("Failed to add torrent to client: %v\n", err)
-		} else {
-			log.Printf("Successfully added torrent to client: %s\n", event.Torrent.Name)
-		}
-
-	case "download_completed":
-		log.Printf("Torrent download completed: %s", event.Torrent.Name)
-
-		// Проверяем, не был ли уже обработан
-		if !eh.service.stateManager.IsAlreadyProcessed(event.Torrent.InfoHash) {
-			// Добавляем в очередь на конвертацию
-			if err := eh.service.ConvertTorrent(event.Torrent.InfoHash); err != nil {
-				log.Printf("Error queuing torrent for conversion: %v", err)
-			}
-		} else {
-			log.Printf("Torrent already processed: %s", event.Torrent.Name)
-		}
-
-	case "downloading_paused":
-		log.Printf("Torrent downloading paused: %s", event.Torrent.Name)
-
-	case "downloading_resumed":
-		log.Printf("Torrent downloading resumed: %s", event.Torrent.Name)
-
-	case "queued_for_conversion":
-		log.Printf("Torrent queued for conversion: %s", event.Torrent.Name)
-
-	case "conversion_completed":
-		log.Printf("Torrent conversion completed: %s", event.Torrent.Name)
-		// Video file info is updated on demand, so we don't need to do anything here.
-
-	default:
-		log.Printf("Unknown event type: %s", event.Type)
+func (eh *EventHandler) refreshJellyfin() {
+	if eh.jellyfinURL == "" || eh.jellyfinToken == "" {
+		return // Jellyfin integration disabled (e.g. local dev).
 	}
-}
+	url := eh.jellyfinURL + "/Library/Refresh"
 
-// GetConversionQueue возвращает канал очереди конвертации
-func (eh *EventHandler) GetConversionQueue() <-chan *Torrent {
-	return eh.service.stateManager.conversionQueue
-}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
-// Stop останавливает обработчик событий
-func (eh *EventHandler) Stop() {
-	close(eh.service.stateManager.conversionQueue)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(nil))
+	if err != nil {
+		log.Printf("[jellyfin] failed to build request: %v", err)
+		return
+	}
+	req.Header.Set("X-Emby-Token", eh.jellyfinToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("[jellyfin] refresh failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		log.Printf("[jellyfin] refresh returned %s", resp.Status)
+	} else {
+		log.Printf("[jellyfin] library refreshed")
+	}
 }

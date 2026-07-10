@@ -1,16 +1,6 @@
 #!/bin/bash
+# Convenience wrapper to build & run the torrent-service locally.
+set -e
 
-# Переходим в директорию с исходным кодом сервера
-cd cmd/server
-
-# Собираем исполняемый файл сервера
-go build
-
-# Копируем собранный исполняемый файл в корневую директорию GoFlix
-cp server /root/GoFlix/
-
-# Переходим обратно в корневую директорию GoFlix
-cd /root/GoFlix/
-
-# Запускаем сервер
+go build -o server ./cmd/server
 ./server

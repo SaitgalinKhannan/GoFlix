@@ -1,50 +1,54 @@
 package torrent
 
-import (
-	"GoFlix/internal/app/media"
-	"time"
-)
+import "time"
 
-// State представляет состояние торрента
-type State int
+// Status represents the current state of a torrent.
+type Status string
 
 const (
-	StateDownloading State = iota
-	StateQueued
-	StateCompleted
-	StatePaused
+	StatusMetadata    Status = "metadata" // fetching metadata
+	StatusQueued      Status = "queued"   // waiting for a download slot
+	StatusDownloading Status = "downloading"
+	StatusSeeding     Status = "seeding"
+	StatusCompleted   Status = "completed"
+	StatusPaused      Status = "paused" // stopped by user, files kept
+	StatusError       Status = "error"
 )
 
-type ConvertingState int
-
-const (
-	StateNotConverted     ConvertingState = iota // Не конвертировано
-	StateConvertingQueued                        // В очереди на конвертацию
-	StateConverting                              // В процессе конвертации
-	StateConverted                               // Успешно конвертирован
-	StateConvertingError                         // Ошибка при конвертации
-)
-
-// Torrent представляет информация о торренте
-type Torrent struct {
-	InfoHash           string          `json:"infoHash"`
-	Name               string          `json:"name"`
-	Magnet             string          `json:"magnet"`
-	Size               int64           `json:"size"`
-	Done               bool            `json:"done"`
-	State              State           `json:"state"`
-	ConvertingState    ConvertingState `json:"convertingState"`
-	CompletedAt        *time.Time      `json:"completedAt,omitempty"`
-	ConvertingQueuedAt *time.Time      `json:"convertingQueuedAt,omitempty"`
-	ConvertedAt        *time.Time      `json:"convertedAt,omitempty"`
-	LastChecked        time.Time       `json:"lastChecked"`
-	DownloadedPercent  float32         `json:"downloadedPercent"`
-	VideoFiles         []VideoFile     `json:"videoFiles,omitempty"`
+// TorrentStatus is the API representation of a torrent, matching the PLAN.md contract.
+type TorrentStatus struct {
+	ID            string     `json:"id"` // aliased to infoHash
+	InfoHash      string     `json:"infoHash"`
+	Name          string     `json:"name"`
+	Status        Status     `json:"status"`
+	Progress      float64    `json:"progress"`      // 0..1
+	DownloadSpeed int64      `json:"downloadSpeed"` // bytes/s
+	UploadSpeed   int64      `json:"uploadSpeed"`   // bytes/s
+	Size          int64      `json:"size"`          // bytes
+	Downloaded    int64      `json:"downloaded"`    // bytes
+	AddedAt       time.Time  `json:"addedAt"`       // ISO 8601
+	CompletedAt   *time.Time `json:"completedAt,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	Files         []FileInfo `json:"files,omitempty"`
 }
 
-// VideoFile представляет информацию о видеофайле
-type VideoFile struct {
-	Path      string           `json:"path"`
-	VideoInfo *media.VideoInfo `json:"videoInfo"`
-	Error     error            `json:"error"`
+// FileInfo describes a single file within a torrent.
+type FileInfo struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// storedTorrent is the persisted representation kept in the state manager.
+// It mirrors TorrentStatus but also carries the magnet link and seeding flag
+// needed to re-add torrents after a restart.
+type storedTorrent struct {
+	InfoHash    string     `json:"infoHash"`
+	Name        string     `json:"name"`
+	Magnet      string     `json:"magnet"`
+	Size        int64      `json:"size"`
+	AddedAt     time.Time  `json:"addedAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	// Seeding indicates whether the user wants this torrent active in the client.
+	// false (default) means stopped/paused.
+	Seeding bool `json:"seeding"`
 }

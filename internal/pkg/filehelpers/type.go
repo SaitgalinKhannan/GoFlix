@@ -1,34 +1,3 @@
+// Package filehelpers provides small file-system utilities (closing files,
+// removing paths) shared across the application.
 package filehelpers
-
-import (
-	"os"
-	"path/filepath"
-	"strings"
-)
-
-func IsVideoFile(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-
-	videoExtensions := []string{
-		".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
-		".m4v", ".3gp", ".ogv", ".ts", ".mts", ".m2ts", ".vob",
-		".asf", ".rm", ".rmvb", ".divx", ".xvid", ".f4v", ".mpg",
-		".mpeg", ".m1v", ".m2v", ".mpe", ".mpv", ".dv", ".qt",
-	}
-
-	for _, videoExt := range videoExtensions {
-		if ext == videoExt {
-			return true
-		}
-	}
-
-	return false
-}
-
-func IsDirectory(path string) (bool, error) {
-	fileInfo, err := os.Stat(path)
-	if err != nil {
-		return false, err
-	}
-	return fileInfo.IsDir(), nil
-}

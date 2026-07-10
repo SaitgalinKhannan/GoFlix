@@ -1,0 +1,93 @@
+services:
+  torrent-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: goflix-torrent-service
+    restart: unless-stopped
+    environment:
+      PORT: "8081"
+      TORRENTS_STATES_FILE: /app/data/torrent_states.json
+      TORRENTS_DIR: /app/data/torrents
+      PIECE_COMPLETION_DIR: /app/data/torrent_data
+      JWT_SECRET: ${JWT_SECRET}
+      AUTH_USERNAME: ${AUTH_USERNAME}
+      AUTH_PASSWORD: ${AUTH_PASSWORD}
+      JELLYFIN_URL: ${JELLYFIN_URL:-http://jellyfin:8096}
+      JELLYFIN_TOKEN: ${JELLYFIN_TOKEN}
+      MAX_CONCURRENT_DOWNLOADS: ${MAX_CONCURRENT_DOWNLOADS:-3}
+    volumes:
+      # Bind mount to a real folder on the host (set DATA_DIR in .env).
+      # Holds torrents/, torrent_data/, torrent_states.json.
+      - ${DATA_DIR:-./data}:/app/data
+    ports:
+      - "${TORRENT_PORT:-8081}:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: goflix-jellyfin
+    restart: unless-stopped
+    environment:
+      JELLYFIN_PublishedServerUrl: ${JELLYFIN_PUBLISHED_URL:-}
+    volumes:
+      # Read-only access to the same host folder (shared with torrent-service).
+      # Point the Jellyfin library at /data/torrents.
+      - ${DATA_DIR:-./data}:/data:ro
+      - jellyfin-config:/config
+      - jellyfin-cache:/cache
+    ports:
+      - "${JELLYFIN_PORT:-8096}:8096"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8096/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # nginx serving the Next.js static export and reverse-proxying /api,
+  # /files, /health to torrent-service. This is the single entrypoint that
+  # cloudflared exposes to the internet.
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: goflix-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    depends_on:
+      torrent-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Cloudflare Tunnel: exposes the frontend (nginx) over HTTPS.
+  # Add TUNNEL_TOKEN to .env and start with:  docker compose --profile tunnel up -d
+  # Configure the public hostname → http://frontend:80 route in the dashboard
+  # (Zero Trust → Networks → Tunnels → your tunnel → Public Hostnames).
+  # The token is read from the TUNNEL_TOKEN env var (cloudflared's native behaviour).
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: goflix-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      frontend:
+        condition: service_healthy
+    profiles: ["tunnel"]
+
+volumes:
+  jellyfin-config:
+  jellyfin-cache:

@@ -6,589 +6,232 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
 
-// StateManager управляет состояниями торрентов
+// StateManager persists known torrents (infohash, name, magnet, completion,
+// seeding preference) to a JSON file and re-broadcasts completion events.
 type StateManager struct {
-	mu           sync.RWMutex
-	states       map[string]*Torrent
-	stateFile    string
-	eventChannel chan Event
+	mu        sync.RWMutex
+	states    map[string]*storedTorrent
+	stateFile string
 
-	// Каналы для фоновых операций
-	saveChannel  chan struct{}
-	batchUpdates chan *Torrent
+	saveChan chan struct{}
+	stopChan chan struct{}
+	wg       sync.WaitGroup
 
-	// Контроль фоновых процессов
-	saveInProgress sync.Mutex
-	stopChan       chan struct{}
-	wg             sync.WaitGroup
-
-	// Очередь на конвертацию
-	conversionQueue chan *Torrent
-	queuedTorrents  map[string]struct{}
-	queueMu         sync.Mutex
+	// completion event channel, consumed by the event handler / Jellyfin hook
+	completedChan chan *storedTorrent
 }
 
-// NewTorrentStateManager создает новый менеджер состояний
-func NewTorrentStateManager(stateFile string) *StateManager {
+// NewStateManager creates a state manager and loads any persisted torrents.
+func NewStateManager(stateFile string) *StateManager {
 	sm := &StateManager{
-		states:          make(map[string]*Torrent),
-		stateFile:       stateFile,
-		eventChannel:    make(chan Event, 1000),
-		saveChannel:     make(chan struct{}, 1),
-		batchUpdates:    make(chan *Torrent, 1000),
-		stopChan:        make(chan struct{}),
-		conversionQueue: make(chan *Torrent, 1000),
-		queuedTorrents:  make(map[string]struct{}),
+		states:        make(map[string]*storedTorrent),
+		stateFile:     stateFile,
+		saveChan:      make(chan struct{}, 1),
+		stopChan:      make(chan struct{}),
+		completedChan: make(chan *storedTorrent, 100),
 	}
-
-	// Загружаем существующие состояния
-	if err := sm.loadStates(); err != nil {
+	if err := sm.load(); err != nil {
 		log.Printf("Warning: failed to load states: %v", err)
 	}
-
-	// Запускаем фоновые процессы
-	sm.startBackgroundProcesses()
-
+	sm.startBackground()
 	return sm
 }
 
-// loadStates загружает состояния из файла
-func (sm *StateManager) loadStates() error {
+// InitStateFile creates an empty state file if none exists.
+func InitStateFile(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
+			return mkErr
+		}
+		file, createErr := os.Create(path)
+		if createErr != nil {
+			return createErr
+		}
+		defer filehelpers.CloseFile(file)
+		if encErr := json.NewEncoder(file).Encode(map[string]any{}); encErr != nil {
+			return encErr
+		}
+		log.Println("Created state file:", path)
+	}
+	return nil
+}
+
+func (sm *StateManager) load() error {
 	file, err := os.Open(sm.stateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			log.Println("State file does not exist, starting with empty state")
 			return nil
 		}
-		return fmt.Errorf("failed to open state file: %w", err)
+		return err
 	}
 	defer filehelpers.CloseFile(file)
 
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&sm.states); err != nil {
+	if err := json.NewDecoder(file).Decode(&sm.states); err != nil {
 		return fmt.Errorf("failed to decode states: %w", err)
 	}
-
 	log.Printf("Loaded %d torrent states from file", len(sm.states))
-
-	// Отправляем события для всех загруженных торрентов
-	sm.sendLoadedTorrentEvents()
-
 	return nil
 }
 
-// sendLoadedTorrentEvents отправляет события для всех загруженных торрентов
-func (sm *StateManager) sendLoadedTorrentEvents() {
-	for _, torrent := range sm.states {
-		event := Event{
-			Type:      "torrent_loaded",
-			Torrent:   torrent,
-			Timestamp: time.Now(),
-		}
-
-		select {
-		case sm.eventChannel <- event:
-			log.Printf("Sent loaded event for torrent: %s", torrent.Name)
-		default:
-			log.Printf("Event channel is full, dropping loaded event for: %s", torrent.Name)
-		}
-	}
-}
-
-// saveStates сохраняет состояния в файл
-func (sm *StateManager) saveStates() error {
-	sm.saveInProgress.Lock()
-	defer sm.saveInProgress.Unlock()
-
+func (sm *StateManager) save() error {
 	sm.mu.RLock()
-	statesCopy := make(map[string]*Torrent, len(sm.states))
+	copy := make(map[string]*storedTorrent, len(sm.states))
 	for k, v := range sm.states {
-		statesCopy[k] = v
+		val := *v
+		copy[k] = &val
 	}
 	sm.mu.RUnlock()
 
-	file, err := os.Create(sm.stateFile + ".tmp")
+	tmp := sm.stateFile + ".tmp"
+	file, err := os.Create(tmp)
 	if err != nil {
-		return fmt.Errorf("failed to create temp file: %w", err)
+		return err
 	}
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(statesCopy); err != nil {
+	enc := json.NewEncoder(file)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(copy); err != nil {
 		filehelpers.CloseFile(file)
-		filehelpers.OsRemove(sm.stateFile + ".tmp")
-		return fmt.Errorf("failed to encode states: %w", err)
+		filehelpers.OsRemove(tmp)
+		return err
 	}
-
 	if err := file.Close(); err != nil {
-		filehelpers.OsRemove(sm.stateFile + ".tmp")
-		return fmt.Errorf("failed to close temp file: %w", err)
+		filehelpers.OsRemove(tmp)
+		return err
 	}
-
-	if err := os.Rename(sm.stateFile+".tmp", sm.stateFile); err != nil {
-		filehelpers.OsRemove(sm.stateFile + ".tmp")
-		return fmt.Errorf("failed to rename temp file: %w", err)
-	}
-
-	return nil
+	return os.Rename(tmp, sm.stateFile)
 }
 
-// startBackgroundProcesses запускает фоновые процессы
-func (sm *StateManager) startBackgroundProcesses() {
-	sm.wg.Add(2)
+func (sm *StateManager) scheduleSave() {
+	select {
+	case sm.saveChan <- struct{}{}:
+	default:
+	}
+}
 
-	// Процесс периодического сохранения
+func (sm *StateManager) startBackground() {
+	sm.wg.Add(1)
 	go func() {
 		defer sm.wg.Done()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-
 		for {
 			select {
 			case <-sm.stopChan:
 				return
 			case <-ticker.C:
-				if err := sm.saveStates(); err != nil {
+				if err := sm.save(); err != nil {
 					log.Printf("Error saving states: %v", err)
 				}
-			case <-sm.saveChannel:
-				if err := sm.saveStates(); err != nil {
+			case <-sm.saveChan:
+				if err := sm.save(); err != nil {
 					log.Printf("Error saving states: %v", err)
 				}
 			}
 		}
 	}()
-
-	// Процесс обработки пакетных обновлений
-	go func() {
-		defer sm.wg.Done()
-		for {
-			select {
-			case <-sm.stopChan:
-				return
-			case torrent := <-sm.batchUpdates:
-				sm.updateTorrentState(torrent)
-			}
-		}
-	}()
 }
 
-// updateTorrentState обновляет состояние торрента
-func (sm *StateManager) updateTorrentState(torrent *Torrent) {
+// Add records a newly added torrent.
+func (sm *StateManager) Add(t *storedTorrent) {
 	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	oldTorrent, exists := sm.states[torrent.InfoHash]
-
-	// if torrent not downloaded drop all states
-	if !torrent.Done {
-		torrent.State = StateDownloading
-		torrent.CompletedAt = nil
-		torrent.ConvertingQueuedAt = nil
-		torrent.ConvertedAt = nil
+	if existing, ok := sm.states[t.InfoHash]; ok {
+		// Preserve addedAt / completedAt if already known.
+		t.AddedAt = existing.AddedAt
+		t.CompletedAt = existing.CompletedAt
 	}
-
-	// Проверяем, если торрент только что завершился или его нет в списке и он завершился
-	if (oldTorrent != nil && !oldTorrent.Done && torrent.Done) || (!exists && torrent.Done) {
-		torrent.State = StateCompleted
-		now := time.Now()
-		torrent.CompletedAt = &now
-
-		// Отправляем событие о завершении загрузки
-		event := Event{
-			Type:      "download_completed",
-			Torrent:   torrent,
-			Timestamp: now,
-		}
-		log.Printf("DEBUG: event: %s", event.Type)
-		select {
-		case sm.eventChannel <- event:
-		default:
-			log.Println("Event channel is full, dropping event")
-		}
-	}
-
-	sm.states[torrent.InfoHash] = torrent
-
-	// Запланировать сохранение
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
+	sm.states[t.InfoHash] = t
+	sm.mu.Unlock()
+	sm.scheduleSave()
 }
 
-// GetTorrent получает торрент по хешу
-func (sm *StateManager) GetTorrent(infoHash string) (*Torrent, error) {
+// Get returns a copy of a stored torrent.
+func (sm *StateManager) Get(infoHash string) (*storedTorrent, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return nil, fmt.Errorf("torrent with infohash %s not found", infoHash)
+	t, ok := sm.states[infoHash]
+	if !ok {
+		return nil, false
 	}
-	torrentCopy := *torrent
-	return &torrentCopy, nil
+	copy := *t
+	return &copy, true
 }
 
-// GetAllTorrents возвращает все торренты
-func (sm *StateManager) GetAllTorrents() map[string]*Torrent {
-	// Take a quick snapshot of pointers under the read lock
-	sm.mu.RLock()
-	snapshot := make(map[string]*Torrent, len(sm.states))
-	for k, v := range sm.states {
-		snapshot[k] = v
-	}
-	sm.mu.RUnlock()
-
-	// Copy values outside the lock to avoid writer starvation
-	result := make(map[string]*Torrent, len(snapshot))
-	for k, v := range snapshot {
-		torrentCopy := *v
-		result[k] = &torrentCopy
-	}
-
-	return result
-}
-
-// UpdateTorrent обновляет информацию о торренте
-func (sm *StateManager) UpdateTorrent(torrent *Torrent) {
-	torrent.LastChecked = time.Now()
-
-	select {
-	case sm.batchUpdates <- torrent:
-	default:
-		// Fallback: process synchronously to avoid dropping updates and log spam
-		sm.updateTorrentState(torrent)
-	}
-}
-
-// RemoveTorrent removes a torrent from the state manager
-func (sm *StateManager) RemoveTorrent(infoHash string) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	delete(sm.states, infoHash)
-
-	// Schedule a save
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-}
-
-// MarkAsPaused помечает торрент как приостановленный
-func (sm *StateManager) MarkAsPaused(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-	if torrent.State == StatePaused {
-		return nil
-	}
-
-	now := time.Now()
-	torrent.State = StatePaused
-	torrent.LastChecked = now
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	// Отправляем событие
-	event := Event{
-		Type:      "downloading_paused",
-		Torrent:   torrent,
-		Timestamp: now,
-	}
-
-	select {
-	case sm.eventChannel <- event:
-	default:
-		log.Println("Event channel is full, dropping event")
-	}
-
-	return nil
-}
-
-// MarkAsResumed помечает торрент как resumed
-func (sm *StateManager) MarkAsResumed(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-	if torrent.State == StateDownloading {
-		return nil
-	}
-
-	now := time.Now()
-	if torrent.Done {
-		torrent.State = StateCompleted
-	} else {
-		torrent.State = StateDownloading
-	}
-	torrent.LastChecked = now
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	// Отправляем событие
-	event := Event{
-		Type:      "downloading_resumed",
-		Torrent:   torrent,
-		Timestamp: now,
-	}
-
-	select {
-	case sm.eventChannel <- event:
-	default:
-		log.Println("Event channel is full, dropping event")
-	}
-
-	return nil
-}
-
-// MarkAsQueued помечает торрент как добавленный в очередь на конвертацию
-func (sm *StateManager) MarkAsQueued(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-
-	if torrent.State != StateCompleted {
-		return fmt.Errorf("torrent %s is not completed yet", infoHash)
-	}
-
-	if torrent.ConvertingState >= StateConvertingQueued && torrent.ConvertingState != StateConvertingError {
-		return nil
-	}
-
-	torrent.ConvertingState = StateConvertingQueued
-	now := time.Now()
-	torrent.ConvertingQueuedAt = &now
-	torrent.LastChecked = now
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	// Отправляем событие
-	event := Event{
-		Type:      "queued_for_conversion",
-		Torrent:   torrent,
-		Timestamp: now,
-	}
-
-	select {
-	case sm.eventChannel <- event:
-	default:
-		log.Println("Event channel is full, dropping event")
-	}
-
-	return nil
-}
-
-// MarkAsConverting помечает торрент как конвертируемый
-func (sm *StateManager) MarkAsConverting(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-
-	torrent.ConvertingState = StateConverting
-	torrent.LastChecked = time.Now()
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	return nil
-}
-
-// MarkAsConverted помечает торрент как успешно конвертированный
-func (sm *StateManager) MarkAsConverted(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-
-	torrent.ConvertingState = StateConverted
-	now := time.Now()
-	torrent.ConvertedAt = &now
-	torrent.LastChecked = now
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	// Отправляем событие
-	event := Event{
-		Type:      "conversion_completed",
-		Torrent:   torrent,
-		Timestamp: now,
-	}
-
-	select {
-	case sm.eventChannel <- event:
-	default:
-		log.Println("Event channel is full, dropping event")
-	}
-
-	return nil
-}
-
-// MarkAsError помечает торрент с ошибкой конвертации
-func (sm *StateManager) MarkAsError(infoHash string) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	torrent, exists := sm.states[infoHash]
-	if !exists {
-		return fmt.Errorf("torrent %s not found", infoHash)
-	}
-
-	torrent.ConvertingState = StateConvertingError
-	torrent.LastChecked = time.Now()
-
-	// Сохраняем состояние
-	select {
-	case sm.saveChannel <- struct{}{}:
-	default:
-	}
-
-	return nil
-}
-
-// IsAlreadyProcessed проверяет, был ли торрент уже обработан
-func (sm *StateManager) IsAlreadyProcessed(infoHash string) bool {
+// All returns copies of all stored torrents.
+func (sm *StateManager) All() []storedTorrent {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	out := make([]storedTorrent, 0, len(sm.states))
+	for _, t := range sm.states {
+		out = append(out, *t)
+	}
+	return out
+}
 
-	torrent, exists := sm.states[infoHash]
-	if !exists {
+// SetSeeding updates the user's seeding preference for a torrent.
+func (sm *StateManager) SetSeeding(infoHash string, seeding bool) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	t, ok := sm.states[infoHash]
+	if !ok {
 		return false
 	}
-
-	return torrent.ConvertingState >= StateConvertingQueued && torrent.ConvertingState != StateConvertingError
+	t.Seeding = seeding
+	sm.scheduleSave()
+	return true
 }
 
-// EventChannel возвращает канал событий
-func (sm *StateManager) EventChannel() <-chan Event {
-	return sm.eventChannel
+// MarkCompleted records the completion time and emits a completion event
+// (used to trigger the Jellyfin library refresh). Returns true if this call
+// is the one that marked completion (i.e. it was newly completed).
+func (sm *StateManager) MarkCompleted(infoHash string) bool {
+	sm.mu.Lock()
+	t, ok := sm.states[infoHash]
+	newlyCompleted := false
+	if ok {
+		if t.CompletedAt == nil {
+			now := time.Now()
+			t.CompletedAt = &now
+			newlyCompleted = true
+			sm.scheduleSave()
+		}
+	}
+	sm.mu.Unlock()
+
+	if newlyCompleted && t != nil {
+		copy := *t
+		select {
+		case sm.completedChan <- &copy:
+		default:
+			log.Println("Completed channel full, dropping event")
+		}
+	}
+	return newlyCompleted
 }
 
-// GetConversionQueue returns the conversion queue channel
-func (sm *StateManager) GetConversionQueue() <-chan *Torrent {
-	return sm.conversionQueue
+// Remove deletes a torrent from state.
+func (sm *StateManager) Remove(infoHash string) {
+	sm.mu.Lock()
+	delete(sm.states, infoHash)
+	sm.mu.Unlock()
+	sm.scheduleSave()
 }
 
-// Stop останавливает фоновые процессы
+// CompletedChan returns the channel that fires when a torrent finishes downloading.
+func (sm *StateManager) CompletedChan() <-chan *storedTorrent {
+	return sm.completedChan
+}
+
+// Stop halts background processes and flushes state to disk.
 func (sm *StateManager) Stop() {
 	close(sm.stopChan)
 	sm.wg.Wait()
-
-	// Финальное сохранение
-	if err := sm.saveStates(); err != nil {
-		log.Printf("Error during final save: %v\n", err)
+	if err := sm.save(); err != nil {
+		log.Printf("Error during final save: %v", err)
 	}
-
-	close(sm.eventChannel)
-}
-
-func (sm *StateManager) AddToConversionQueue(t *Torrent) error {
-	sm.queueMu.Lock()
-	defer sm.queueMu.Unlock()
-
-	// Проверяем, есть ли торрент уже в очереди
-	if _, exists := sm.queuedTorrents[t.InfoHash]; exists {
-		return fmt.Errorf("the torrent is already in the queue")
-	}
-
-	// Добавляем торрент в мапу отслеживания
-	sm.queuedTorrents[t.InfoHash] = struct{}{}
-
-	// Отправляем торрент в канал для обработки
-	select {
-	case sm.conversionQueue <- t:
-		log.Printf("Added torrent to conversion queue: %s", t.Name)
-	default:
-		log.Printf("Conversion queue is full, torrent: %s", t.Name)
-		return fmt.Errorf("conversion queue is full")
-	}
-
-	return nil
-}
-
-func (sm *StateManager) RemoveFromConversionQueue(t *Torrent) {
-	sm.queueMu.Lock()
-	defer sm.queueMu.Unlock()
-
-	delete(sm.queuedTorrents, t.InfoHash)
-}
-
-func (sm *StateManager) MarkTorrentCompleted(torrent *Torrent) {
-	event := Event{
-		Type:      "download_completed",
-		Torrent:   torrent,
-		Timestamp: time.Now(),
-	}
-
-	select {
-	case sm.eventChannel <- event:
-	default:
-		log.Println("Event channel is full, dropping event")
-	}
-}
-
-func InitTorrentStatesFile(torrentStatesPath string) error {
-	// Проверяем, существует ли файл
-	if _, err := os.Stat(torrentStatesPath); os.IsNotExist(err) {
-		// Файл не существует — создаём его
-		file, createErr := os.Create(torrentStatesPath)
-		if createErr != nil {
-			return createErr
-		}
-
-		defer filehelpers.CloseFile(file)
-
-		// Записываем пустой JSON-объект: {}
-		encoder := json.NewEncoder(file)
-		if encodeErr := encoder.Encode(map[string]interface{}{}); encodeErr != nil {
-			return encodeErr
-		}
-
-		log.Println("Файл", torrentStatesPath, "создан.")
-	} else {
-		log.Println("Файл", torrentStatesPath, "уже существует.")
-	}
-
-	return nil
+	close(sm.completedChan)
 }

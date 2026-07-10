@@ -1,8 +1,11 @@
 package torrent
 
-func getPercent(n, total int64) float32 {
-	if total == 0 {
-		return float32(0)
+func clamp01(f float64) float64 {
+	if f < 0 {
+		return 0
 	}
-	return float32(int(float64(10000)*(float64(n)/float64(total)))) / 100
+	if f > 1 {
+		return 1
+	}
+	return f
 }

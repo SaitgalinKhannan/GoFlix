@@ -4,3 +4,11 @@
 /data/
 .env
 ./server
+
+# Frontend
+/frontend/node_modules/
+/frontend/.next/
+/frontend/out/
+
+# ZCode agent internals
+/.zcode/

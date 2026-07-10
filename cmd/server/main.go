@@ -2,6 +2,7 @@ package main
 
 import (
 	"GoFlix/configs"
+	"GoFlix/internal/app/auth"
 	"GoFlix/internal/app/torrent"
 	"GoFlix/internal/app/web"
 	"context"
@@ -26,42 +27,53 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	log.Printf("Config loaded:\n")
-	log.Printf("  Port: %s\n", cfg.Port)
-	log.Printf("  TorrentsStatesFile: %s\n", cfg.TorrentsStatesFile)
-	log.Printf("  TorrentsDir: %s\n", cfg.TorrentsDir)
-	log.Printf("  PieceCompletionDir: %s\n", cfg.PieceCompletionDir)
+	log.Printf("Config loaded:")
+	log.Printf("  Port: %s", cfg.Port)
+	log.Printf("  TorrentsStatesFile: %s", cfg.TorrentsStatesFile)
+	log.Printf("  TorrentsDir: %s", cfg.TorrentsDir)
+	log.Printf("  PieceCompletionDir: %s", cfg.PieceCompletionDir)
+	log.Printf("  MaxConcurrentDownloads: %d", cfg.MaxConcurrentDownloads)
+	log.Printf("  Auth user: %s", cfg.AuthUsername)
+	if cfg.JellyfinURL == "" {
+		log.Println("  Jellyfin hook disabled (JELLYFIN_URL not set)")
+	}
 
-	// Ожидаем сигнал для graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Инициализация файла состояний торрентов
-	if err := torrent.InitTorrentStatesFile(cfg.TorrentsStatesFile); err != nil {
+	// Persisted torrent state
+	if err := torrent.InitStateFile(cfg.TorrentsStatesFile); err != nil {
 		log.Fatalf("Failed to init torrent states file: %v", err)
 	}
 
-	// Инициализируем торрент-клиент
+	// Torrent client
 	torrentClient, err := torrent.NewClient(cfg.TorrentsDir, cfg.PieceCompletionDir)
 	if err != nil {
 		log.Fatal("Failed to init torrent client:", err)
 	}
 
-	sm := torrent.NewTorrentStateManager(cfg.TorrentsStatesFile)
-	torrentService := torrent.NewService(torrentClient, sm)
-	eventHandler := torrent.NewEventHandler(torrentService)
+	stateManager := torrent.NewStateManager(cfg.TorrentsStatesFile)
+	statusHub := torrent.NewStatusHub()
+	torrentService := torrent.NewService(torrentClient, stateManager, statusHub, cfg.MaxConcurrentDownloads)
+
+	// Jellyfin hook on completion
+	eventHandler := torrent.NewEventHandler(stateManager, cfg.JellyfinURL, cfg.JellyfinToken)
 	eventHandler.Start()
 
-	// Запускаем фоновые процессы
+	// Background workers (broadcaster + scheduler)
 	torrentService.StartBackgroundWorkers(sigChan)
 
-	// Создаем и запускаем веб-сервер
-	server := web.NewServer(cfg, torrentService)
+	// Auth: hash the configured password once at startup.
+	passwordHash, err := auth.HashPassword(cfg.AuthPassword)
+	if err != nil {
+		log.Fatalf("Failed to hash password: %v", err)
+	}
+	authService := auth.NewService(cfg.AuthUsername, passwordHash, []byte(cfg.JWTSecret), []byte("goflix"))
 
-	// Server run context
+	server := web.NewServer(cfg, torrentService, authService)
+
 	serverCtx, serverStopCtx := context.WithCancel(context.Background())
 
-	// Goroutine для graceful shutdown
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -72,7 +84,6 @@ func main() {
 		<-sigChan
 		log.Println("Shutting down...")
 
-		// Shutdown signal with grace period of 30 seconds
 		shutdownCtx, cancel := context.WithTimeout(serverCtx, 30*time.Second)
 		defer cancel()
 
@@ -83,28 +94,20 @@ func main() {
 			}
 		}()
 
-		// Завершаем работу HTTP-сервера
-		if serverShutdownErr := server.Shutdown(shutdownCtx); serverShutdownErr != nil {
-			log.Printf("HTTP server Shutdown: %v", serverShutdownErr)
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			log.Printf("HTTP server Shutdown: %v", err)
+		}
+		if err := torrentClient.Close(); err != nil {
+			log.Printf("Error closing torrent client: %v", err)
 		}
 
-		// Закрываем торрент-клиент с обработкой ошибки
-		if torrentClientCloseErr := torrentClient.Close(); torrentClientCloseErr != nil {
-			log.Printf("Error closing torrent client: %v", torrentClientCloseErr)
-		}
-
-		// Останавливаем компоненты
-		eventHandler.Stop()
-		sm.Stop()
-
+		stateManager.Stop()
 		serverStopCtx()
 	}()
 
-	// Запускаем сервер
-	if startErr := server.Start(); startErr != nil {
-		log.Fatalf("Server failed to start: %v", startErr)
+	if err := server.Start(); err != nil {
+		log.Fatalf("Server failed to start: %v", err)
 	}
 
-	// Wait for server context to be stopped
 	<-serverCtx.Done()
 }
