@@ -22,12 +22,13 @@ var _ io.Closer = (*Client)(nil)
 // Client wraps anacrolix/torrent client and tracks per-torrent byte counters
 // so download/upload speeds can be derived between ticks.
 type Client struct {
-	tClient *torrent.Client
-	baseDir string
+	tClient         *torrent.Client
+	baseDir         string
+	pieceCompletion storage.PieceCompletion
 
-	mu        sync.Mutex
-	samples   map[string]*speedTracker // keyed by infoHash
-	paused    map[string]bool          // infoHash → paused (DisallowData* called)
+	mu      sync.Mutex
+	samples map[string]*speedTracker // keyed by infoHash
+	paused  map[string]bool          // infoHash → paused (DisallowData* called)
 }
 
 // speedTracker smooths download/upload speed using exponential moving average,
@@ -95,14 +96,13 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 	if err := os.MkdirAll(clientBaseDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(pieceCompletionDir, 0o700); err != nil {
-		return nil, err
-	}
 
-	pieceCompletion, err := storage.NewDefaultPieceCompletionForDir(pieceCompletionDir)
-	if err != nil {
-		return nil, err
-	}
+	// Use an in-memory piece completion (MapPieceCompletion) instead of the
+	// default bolt DB. The bolt DB uses NoSync=true which loses piece state on
+	// restart, causing torrents to appear to restart from zero. With an in-memory
+	// store, anacrolix re-hashes existing files on add — correctly detecting
+	// already-downloaded pieces. This makes resume reliable across restarts.
+	pieceCompletion := storage.NewMapPieceCompletion()
 
 	opts := storage.NewFileClientOpts{
 		ClientBaseDir:   clientBaseDir,
@@ -118,10 +118,11 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 	}
 
 	return &Client{
-		tClient: tClient,
-		baseDir: clientBaseDir,
-		samples: make(map[string]*speedTracker),
-		paused:  make(map[string]bool),
+		tClient:         tClient,
+		baseDir:         clientBaseDir,
+		pieceCompletion: pieceCompletion,
+		samples:         make(map[string]*speedTracker),
+		paused:          make(map[string]bool),
 	}, nil
 }
 
