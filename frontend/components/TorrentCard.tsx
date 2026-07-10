@@ -102,7 +102,7 @@ export default function TorrentCard({
             disabled={busy}
             className="rounded-lg border border-white/15 px-3 py-1.5 text-xs text-gray-200 transition hover:bg-white/10 disabled:opacity-50"
           >
-            Stop seeding
+            {torrent.status === "seeding" || torrent.status === "completed" ? "Stop seeding" : "Stop"}
           </button>
         ) : (
           <button
