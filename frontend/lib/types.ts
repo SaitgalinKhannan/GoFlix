@@ -13,6 +13,11 @@ export interface FileInfo {
   size: number;
 }
 
+export interface SpeedLimits {
+  download: number; // bytes/s, 0 = unlimited
+  upload: number; // bytes/s, 0 = unlimited
+}
+
 // Matches the Go TorrentStatus JSON contract.
 export interface TorrentStatus {
   id: string;
@@ -22,6 +27,8 @@ export interface TorrentStatus {
   progress: number; // 0..1
   downloadSpeed: number; // bytes/s
   uploadSpeed: number; // bytes/s
+  seeders: number; // currently connected peers with all pieces
+  leechers: number; // currently connected peers still downloading
   eta: number; // seconds remaining (0 = done/unknown)
   size: number; // bytes
   downloaded: number; // bytes

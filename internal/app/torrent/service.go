@@ -224,6 +224,16 @@ func (s *Service) Recheck(infoHash string) error {
 	return s.enqueueRecheck(*st)
 }
 
+// SpeedLimits returns global download and upload limits in bytes per second.
+func (s *Service) SpeedLimits() SpeedLimits {
+	return s.client.SpeedLimits()
+}
+
+// SetSpeedLimits applies and persists global download and upload limits.
+func (s *Service) SetSpeedLimits(limits SpeedLimits) error {
+	return s.client.SetSpeedLimits(limits)
+}
+
 // StartBackgroundWorkers runs the status broadcaster, the concurrent-download
 // scheduler, and the completion monitor. All stop on sigChan.
 func (s *Service) StartBackgroundWorkers(sigChan chan os.Signal) {

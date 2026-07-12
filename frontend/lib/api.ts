@@ -1,8 +1,10 @@
-import type { TorrentStatus } from "./types";
+import type { SpeedLimits, TorrentStatus } from "./types";
 
 // API base URL: explicit override via env, otherwise same-origin (nginx proxies /api).
+const isTauri = typeof window !== "undefined" && !!window.__TAURI__?.core?.invoke;
+
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || (isTauri ? "http://127.0.0.1:8080" : "");
 
 const ACCESS_KEY = "goflix_access";
 const REFRESH_KEY = "goflix_refresh";
@@ -160,4 +162,23 @@ export async function recheckTorrent(id: string): Promise<void> {
     const text = await res.text().catch(() => "");
     throw new Error(text || `recheck failed: ${res.status}`);
   }
+}
+
+export async function getSpeedLimits(): Promise<SpeedLimits> {
+  const res = await authedFetch("/api/v1/settings/speed-limits");
+  if (!res.ok) throw new Error(`limits failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateSpeedLimits(limits: SpeedLimits): Promise<SpeedLimits> {
+  const res = await authedFetch("/api/v1/settings/speed-limits", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(limits),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `update limits failed: ${res.status}`);
+  }
+  return res.json();
 }

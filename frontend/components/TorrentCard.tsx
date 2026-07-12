@@ -21,6 +21,7 @@ import {
   Square,
   Trash2,
   TriangleAlert,
+  Users,
   X,
 } from "lucide-react";
 import { deleteTorrent, recheckTorrent, startSeeding, stopSeeding } from "@/lib/api";
@@ -194,9 +195,11 @@ export default function TorrentCard({
         </div>
 
         <div className="mt-5 flex flex-col gap-4 border-t border-white/[0.07] pt-4 lg:flex-row lg:items-center lg:justify-between">
-          <div className="grid min-w-0 grid-cols-2 gap-x-6 gap-y-3 sm:flex sm:items-center sm:gap-7">
+          <div className="grid min-w-0 grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3 lg:grid-cols-6">
             <Metric icon={ArrowDownToLine} label="Down" value={formatSpeed(torrent.downloadSpeed)} active={torrent.downloadSpeed > 0} />
             <Metric icon={ArrowUpFromLine} label="Up" value={formatSpeed(torrent.uploadSpeed)} />
+            <Metric icon={RadioTower} label="Seeders" value={String(torrent.seeders)} active={torrent.seeders > 0} />
+            <Metric icon={Users} label="Leechers" value={String(torrent.leechers)} active={torrent.leechers > 0} />
             <Metric icon={Clock3} label="ETA" value={formatEta(torrent.eta)} />
             <Metric icon={FileStack} label="Size" value={formatBytes(torrent.size)} />
           </div>

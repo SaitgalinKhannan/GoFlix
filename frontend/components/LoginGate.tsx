@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { ArrowRight, LoaderCircle, LockKeyhole, Radio, UserRound } from "lucide-react";
+import DesktopDataDirectory from "@/components/DesktopDataDirectory";
 import { clearTokens, hasTokens, listTorrents, login } from "@/lib/api";
 
 export default function LoginGate({ onReady }: { onReady: () => void }) {
@@ -70,6 +71,8 @@ export default function LoginGate({ onReady }: { onReady: () => void }) {
             <p className="text-[11px] text-slate-500">Torrent control center</p>
           </div>
         </div>
+
+        <DesktopDataDirectory />
 
         <form onSubmit={submit} className="rounded-lg border border-white/[0.1] bg-panel p-5 shadow-[0_24px_80px_rgba(0,0,0,0.42)] sm:p-6">
           <div className="mb-6 flex items-center justify-between border-b border-white/[0.07] pb-5">

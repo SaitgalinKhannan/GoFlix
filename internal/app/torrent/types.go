@@ -5,6 +5,13 @@ import "time"
 // Status represents the current state of a torrent.
 type Status string
 
+// SpeedLimits are global client-wide transfer limits in bytes per second.
+// A zero value means unlimited.
+type SpeedLimits struct {
+	Download int64 `json:"download"`
+	Upload   int64 `json:"upload"`
+}
+
 const (
 	StatusMetadata    Status = "metadata" // fetching metadata
 	StatusChecking    Status = "checking" // verifying local pieces against their hashes
@@ -25,6 +32,8 @@ type TorrentStatus struct {
 	Progress      float64    `json:"progress"`      // 0..1
 	DownloadSpeed int64      `json:"downloadSpeed"` // bytes/s
 	UploadSpeed   int64      `json:"uploadSpeed"`   // bytes/s
+	Seeders       int        `json:"seeders"`       // connected peers with all pieces
+	Leechers      int        `json:"leechers"`      // connected peers still downloading
 	Eta           int64      `json:"eta,omitempty"` // seconds remaining (0 = done/unknown)
 	Size          int64      `json:"size"`          // bytes
 	Downloaded    int64      `json:"downloaded"`    // bytes
