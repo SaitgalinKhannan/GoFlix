@@ -41,7 +41,7 @@ func (s *Server) SetupRouter() http.Handler {
 	// Global middleware
 	router.Use(middleware.RequestID, middleware.RealIP, middleware.Logger, middleware.Recoverer)
 	router.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"https://*", "http://*"},
+		AllowedOrigins:   []string{"https://*", "http://*", "tauri://localhost", "https://tauri.localhost"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"*"},
 		ExposedHeaders:   []string{"Link"},
@@ -68,7 +68,11 @@ func (s *Server) SetupRouter() http.Handler {
 			r.Delete("/{id}", handlers.DeleteTorrentHandler(s.torrentService))
 			r.Post("/{id}/start", handlers.StartSeedingHandler(s.torrentService))
 			r.Post("/{id}/stop", handlers.StopSeedingHandler(s.torrentService))
+			r.Post("/{id}/recheck", handlers.RecheckHandler(s.torrentService))
 		})
+
+		v1.Get("/settings/speed-limits", handlers.GetSpeedLimitsHandler(s.torrentService))
+		v1.Put("/settings/speed-limits", handlers.SetSpeedLimitsHandler(s.torrentService))
 
 		v1.Get("/events", handlers.SSEHandler(s.torrentService))
 	})

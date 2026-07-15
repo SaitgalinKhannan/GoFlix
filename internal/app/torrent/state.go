@@ -213,6 +213,20 @@ func (sm *StateManager) MarkCompleted(infoHash string) bool {
 	return newlyCompleted
 }
 
+// MarkIncomplete clears stale completion metadata after a hash check finds
+// missing or corrupt pieces.
+func (sm *StateManager) MarkIncomplete(infoHash string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	t, ok := sm.states[infoHash]
+	if !ok || t.CompletedAt == nil {
+		return false
+	}
+	t.CompletedAt = nil
+	sm.scheduleSave()
+	return true
+}
+
 // Remove deletes a torrent from state.
 func (sm *StateManager) Remove(infoHash string) {
 	sm.mu.Lock()

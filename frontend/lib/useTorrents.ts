@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { API_BASE, getAccessToken, listTorrents, refresh } from "./api";
+import { getApiBase, getAccessToken, listTorrents, refresh as refreshTokens } from "./api";
 import type { TorrentStatus } from "./types";
 
 /**
@@ -29,6 +29,7 @@ export function useTorrents(enabled: boolean, onAuthError?: () => void) {
     if (!enabled) return;
 
     let stopped = false;
+    let authFailed = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
     const ctrl = new AbortController();
 
@@ -45,26 +46,41 @@ export function useTorrents(enabled: boolean, onAuthError?: () => void) {
 
     refreshFn.current();
 
-    fetchEventSource(`${API_BASE}/api/v1/events`, {
+    fetchEventSource(`${getApiBase()}/api/v1/events`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${getAccessToken()}` },
       signal: ctrl.signal,
       openWhenHidden: true,
+      // fetch-event-source keeps its original headers between retries. Read
+      // the token for every connection, otherwise an SSE stream cannot recover
+      // after the access token expires while the page is open.
+      fetch(input, init) {
+        const headers = new Headers(init?.headers);
+        const accessToken = getAccessToken();
+        if (accessToken) {
+          headers.set("Authorization", `Bearer ${accessToken}`);
+        } else {
+          headers.delete("Authorization");
+        }
+        return fetch(input, { ...init, headers });
+      },
 
       async onopen(res) {
         if (res.ok) {
           setConnected(true);
           stopPolling();
+          void refreshFn.current();
           return;
         }
         if (res.status === 401) {
-          // Try a token refresh; if it fails, surface the auth error.
+          // Refresh first; the custom fetch above supplies the new token to
+          // the library's next connection attempt.
           try {
-            await refresh();
-            throw new Error("retry"); // reopen with the fresh token
+            await refreshTokens();
           } catch {
+            authFailed = true;
             onAuthError?.();
           }
+          throw new Error("SSE token refresh required");
         }
         throw new Error(`SSE open failed: ${res.status}`);
       },
@@ -81,14 +97,21 @@ export function useTorrents(enabled: boolean, onAuthError?: () => void) {
         if (stopped) return;
         setConnected(false);
         startPolling();
+        if (authFailed) {
+          throw new Error("SSE authentication failed");
+        }
+        return 3000;
       },
       onclose() {
         if (stopped) return;
         setConnected(false);
         startPolling();
+        // A cleanly closed HTTP stream is otherwise treated as final by the
+        // library, leaving the UI in polling mode forever after a reconnect.
+        throw new Error("SSE connection closed");
       },
     }).catch(() => {
-      if (!stopped) startPolling();
+      if (!stopped && !authFailed) startPolling();
     });
 
     return () => {

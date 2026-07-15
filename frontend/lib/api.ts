@@ -1,8 +1,18 @@
-import type { TorrentStatus } from "./types";
+import type { SpeedLimits, TorrentStatus } from "./types";
 
 // API base URL: explicit override via env, otherwise same-origin (nginx proxies /api).
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "";
+const isTauri = typeof window !== "undefined" && !!window.__TAURI__?.core?.invoke;
+
+let apiBase =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || (isTauri ? "http://127.0.0.1:8081" : "");
+
+export function getApiBase(): string {
+  return apiBase;
+}
+
+export function setDesktopApiBase(value: string): void {
+  if (isTauri) apiBase = value.replace(/\/$/, "");
+}
 
 const ACCESS_KEY = "goflix_access";
 const REFRESH_KEY = "goflix_refresh";
@@ -45,11 +55,16 @@ export async function login(
   username: string,
   password: string,
 ): Promise<TokenPair> {
-  const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${getApiBase()}/api/v1/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+  } catch {
+    throw new Error(`Cannot reach GoFlix backend at ${getApiBase() || "this origin"}`);
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `login failed: ${res.status}`);
@@ -62,7 +77,7 @@ export async function login(
 export async function refresh(): Promise<TokenPair> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) throw new Error("no refresh token");
-  const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+  const res = await fetch(`${getApiBase()}/api/v1/auth/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken }),
@@ -86,7 +101,7 @@ async function authedFetch(
   const headers = new Headers(init.headers);
   if (access) headers.set("Authorization", `Bearer ${access}`);
 
-  let res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  let res = await fetch(`${getApiBase()}${path}`, { ...init, headers });
   if (res.status !== 401) return res;
 
   // Access token expired — try to refresh once and replay.
@@ -96,7 +111,7 @@ async function authedFetch(
     return res; // refresh failed; return the 401 so the caller can log out.
   }
   headers.set("Authorization", `Bearer ${getAccessToken()}`);
-  return fetch(`${API_BASE}${path}`, { ...init, headers });
+  return fetch(`${getApiBase()}${path}`, { ...init, headers });
 }
 
 // ---- torrents ----
@@ -152,4 +167,31 @@ export async function startSeeding(id: string): Promise<void> {
 export async function stopSeeding(id: string): Promise<void> {
   const res = await authedFetch(`/api/v1/torrents/${id}/stop`, { method: "POST" });
   if (!res.ok) throw new Error(`stop failed: ${res.status}`);
+}
+
+export async function recheckTorrent(id: string): Promise<void> {
+  const res = await authedFetch(`/api/v1/torrents/${id}/recheck`, { method: "POST" });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `recheck failed: ${res.status}`);
+  }
+}
+
+export async function getSpeedLimits(): Promise<SpeedLimits> {
+  const res = await authedFetch("/api/v1/settings/speed-limits");
+  if (!res.ok) throw new Error(`limits failed: ${res.status}`);
+  return res.json();
+}
+
+export async function updateSpeedLimits(limits: SpeedLimits): Promise<SpeedLimits> {
+  const res = await authedFetch("/api/v1/settings/speed-limits", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(limits),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text || `update limits failed: ${res.status}`);
+  }
+  return res.json();
 }

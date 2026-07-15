@@ -2,6 +2,7 @@ package torrent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"golang.org/x/time/rate"
 )
 
 var _ io.Closer = (*Client)(nil)
@@ -22,12 +24,20 @@ var _ io.Closer = (*Client)(nil)
 // Client wraps anacrolix/torrent client and tracks per-torrent byte counters
 // so download/upload speeds can be derived between ticks.
 type Client struct {
-	tClient *torrent.Client
-	baseDir string
+	tClient         *torrent.Client
+	baseDir         string
+	pieceCompletion storage.PieceCompletion
 
-	mu        sync.Mutex
-	samples   map[string]*speedTracker // keyed by infoHash
-	paused    map[string]bool          // infoHash → paused (DisallowData* called)
+	mu       sync.Mutex
+	samples  map[string]*speedTracker // keyed by infoHash
+	paused   map[string]bool          // infoHash → paused (DisallowData* called)
+	checking map[string]bool          // infoHash → local data is being hash-checked
+
+	limitMu         sync.RWMutex
+	speedLimits     SpeedLimits
+	speedLimitsFile string
+	downloadLimiter *rate.Limiter
+	uploadLimiter   *rate.Limiter
 }
 
 // speedTracker smooths download/upload speed using exponential moving average,
@@ -91,18 +101,21 @@ func (st *speedTracker) current() (dlSpeed, ulSpeed int64) {
 }
 
 // NewClient creates a new torrent client downloading into clientBaseDir.
-func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
+func NewClient(clientBaseDir, pieceCompletionDir, speedLimitsFile string, defaults SpeedLimits) (*Client, error) {
 	if err := os.MkdirAll(clientBaseDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(pieceCompletionDir, 0o700); err != nil {
-		return nil, err
-	}
-
-	pieceCompletion, err := storage.NewDefaultPieceCompletionForDir(pieceCompletionDir)
+	limits, err := loadSpeedLimits(speedLimitsFile, defaults)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load speed limits: %w", err)
 	}
+	downloadLimiter := newRateLimiter(limits.Download)
+	uploadLimiter := newRateLimiter(limits.Upload)
+
+	// Avoid carrying stale completion flags across restarts. The service runs an
+	// explicit VerifyDataContext pass for every restored torrent before it lets
+	// the torrent transfer data again.
+	pieceCompletion := storage.NewMapPieceCompletion()
 
 	opts := storage.NewFileClientOpts{
 		ClientBaseDir:   clientBaseDir,
@@ -111,6 +124,12 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 
 	config := torrent.NewDefaultClientConfig()
 	config.DefaultStorage = storage.NewFileOpts(opts)
+	config.DownloadRateLimiter = downloadLimiter
+	config.UploadRateLimiter = uploadLimiter
+	// anacrolix defaults Seed to false, which stops altruistic uploads once a
+	// torrent no longer needs data. GoFlix keeps completed torrents available
+	// until the user explicitly stops them.
+	config.Seed = true
 
 	tClient, err := torrent.NewClient(config)
 	if err != nil {
@@ -118,11 +137,108 @@ func NewClient(clientBaseDir, pieceCompletionDir string) (*Client, error) {
 	}
 
 	return &Client{
-		tClient: tClient,
-		baseDir: clientBaseDir,
-		samples: make(map[string]*speedTracker),
-		paused:  make(map[string]bool),
+		tClient:         tClient,
+		baseDir:         clientBaseDir,
+		pieceCompletion: pieceCompletion,
+		samples:         make(map[string]*speedTracker),
+		paused:          make(map[string]bool),
+		checking:        make(map[string]bool),
+		speedLimits:     limits,
+		speedLimitsFile: speedLimitsFile,
+		downloadLimiter: downloadLimiter,
+		uploadLimiter:   uploadLimiter,
 	}, nil
+}
+
+func newRateLimiter(bytesPerSecond int64) *rate.Limiter {
+	limit := rate.Inf
+	if bytesPerSecond > 0 {
+		limit = rate.Limit(bytesPerSecond)
+	}
+	// anacrolix can read or write blocks up to 1 MiB. A smaller burst can make
+	// WaitN reject a transfer instead of merely delaying it.
+	return rate.NewLimiter(limit, 1<<20)
+}
+
+func loadSpeedLimits(path string, defaults SpeedLimits) (SpeedLimits, error) {
+	if err := validateSpeedLimits(defaults); err != nil {
+		return SpeedLimits{}, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return defaults, nil
+	}
+	if err != nil {
+		return SpeedLimits{}, err
+	}
+	var limits SpeedLimits
+	if err := json.Unmarshal(data, &limits); err != nil {
+		return SpeedLimits{}, err
+	}
+	if err := validateSpeedLimits(limits); err != nil {
+		return SpeedLimits{}, err
+	}
+	return limits, nil
+}
+
+func validateSpeedLimits(limits SpeedLimits) error {
+	if limits.Download < 0 || limits.Upload < 0 {
+		return errors.New("speed limits cannot be negative")
+	}
+	return nil
+}
+
+// SpeedLimits returns the current client-wide rate limits.
+func (c *Client) SpeedLimits() SpeedLimits {
+	c.limitMu.RLock()
+	defer c.limitMu.RUnlock()
+	return c.speedLimits
+}
+
+// SetSpeedLimits atomically persists and applies client-wide rate limits.
+func (c *Client) SetSpeedLimits(limits SpeedLimits) error {
+	if err := validateSpeedLimits(limits); err != nil {
+		return err
+	}
+	c.limitMu.Lock()
+	defer c.limitMu.Unlock()
+	if err := saveSpeedLimits(c.speedLimitsFile, limits); err != nil {
+		return fmt.Errorf("persist speed limits: %w", err)
+	}
+	setRateLimit(c.downloadLimiter, limits.Download)
+	setRateLimit(c.uploadLimiter, limits.Upload)
+	c.speedLimits = limits
+	return nil
+}
+
+func setRateLimit(limiter *rate.Limiter, bytesPerSecond int64) {
+	if bytesPerSecond == 0 {
+		limiter.SetLimit(rate.Inf)
+		return
+	}
+	limiter.SetLimit(rate.Limit(bytesPerSecond))
+}
+
+func saveSpeedLimits(path string, limits SpeedLimits) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".speed-limits-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(limits); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // BaseDir returns the directory the client downloads into.
@@ -206,6 +322,12 @@ func (c *Client) StartSeeding(magnet string) (infoHash string, err error) {
 	case <-time.After(60 * time.Second):
 		return "", errors.New("timed out waiting for torrent metadata")
 	}
+	c.mu.Lock()
+	checking := c.checking[t.InfoHash().String()]
+	c.mu.Unlock()
+	if checking {
+		return "", fmt.Errorf("torrent %s is being checked", t.InfoHash())
+	}
 	t.AllowDataDownload()
 	t.AllowDataUpload()
 	t.DownloadAll()
@@ -245,6 +367,7 @@ func (c *Client) dropTorrent(infoHash string) {
 	}
 	c.mu.Lock()
 	delete(c.paused, infoHash)
+	delete(c.checking, infoHash)
 	c.mu.Unlock()
 }
 
@@ -252,6 +375,60 @@ func (c *Client) dropTorrent(infoHash string) {
 // MUST be called with c.mu already held (Statuses uses it inside its lock).
 func (c *Client) isPaused(infoHash string) bool {
 	return c.paused[infoHash]
+}
+
+// recheck forces a full piece-by-piece hash verification of local data. The
+// torrent remains paused when this returns; the service decides whether it
+// should resume based on the latest persisted user preference.
+func (c *Client) recheck(ctx context.Context, expectedInfoHash, magnet string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	t, err := c.tClient.AddMagnet(magnet)
+	if err != nil {
+		return err
+	}
+	if t == nil {
+		return fmt.Errorf("failed to add torrent: %s", magnet)
+	}
+	infoHash := t.InfoHash().String()
+	if infoHash != expectedInfoHash {
+		return fmt.Errorf("magnet infohash %s does not match stored infohash %s", infoHash, expectedInfoHash)
+	}
+
+	c.mu.Lock()
+	if c.checking[infoHash] {
+		c.mu.Unlock()
+		return fmt.Errorf("torrent %s is already being checked", infoHash)
+	}
+	c.checking[infoHash] = true
+	c.paused[infoHash] = true
+	delete(c.samples, infoHash)
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.checking, infoHash)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			delete(c.paused, infoHash)
+		} else {
+			c.paused[infoHash] = true
+		}
+		c.mu.Unlock()
+	}()
+
+	// Hashing data while peers are writing it can produce false negatives.
+	t.DisallowDataDownload()
+	t.DisallowDataUpload()
+
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(60 * time.Second):
+		return errors.New("timed out waiting for torrent metadata")
+	}
+
+	return t.VerifyDataContext(ctx)
 }
 
 // DeleteFiles removes the torrent's downloaded data from disk.
@@ -284,8 +461,12 @@ func (c *Client) sampleSpeeds() {
 			tracker = newSpeedTracker()
 			c.samples[infoHash] = tracker
 		}
-		uploaded := t.Stats().BytesWrittenData
-		tracker.record(t.BytesCompleted(), uploaded.Int64(), now)
+		stats := t.Stats()
+		tracker.record(
+			stats.BytesReadUsefulData.Int64(),
+			stats.BytesWrittenData.Int64(),
+			now,
+		)
 	}
 }
 
@@ -322,6 +503,16 @@ func (c *Client) Statuses() []TorrentStatus {
 			progress = clamp01(float64(completed) / float64(size))
 		}
 
+		// anacrolix exposes the count of connected seeders directly. Every other
+		// connected peer is a leecher (or has not sent its bitfield yet), which is
+		// the useful number for showing whether there is somebody to upload from.
+		peerStats := t.Stats()
+		seeders := peerStats.ConnectedSeeders
+		leechers := peerStats.ActivePeers - seeders
+		if leechers < 0 {
+			leechers = 0
+		}
+
 		status := StatusDownloading
 		if info == nil {
 			status = StatusMetadata
@@ -332,6 +523,15 @@ func (c *Client) Statuses() []TorrentStatus {
 		if c.isPaused(infoHash) {
 			status = StatusPaused
 		}
+		if c.checking[infoHash] {
+			status = StatusChecking
+		}
+
+		// ETA: seconds remaining, based on the smoothed speed.
+		var eta int64
+		if status == StatusDownloading && dlSpeed > 0 && size > completed {
+			eta = (size - completed) / dlSpeed
+		}
 
 		out = append(out, TorrentStatus{
 			ID:            infoHash,
@@ -341,6 +541,9 @@ func (c *Client) Statuses() []TorrentStatus {
 			Progress:      progress,
 			DownloadSpeed: dlSpeed,
 			UploadSpeed:   ulSpeed,
+			Seeders:       seeders,
+			Leechers:      leechers,
+			Eta:           eta,
 			Size:          size,
 			Downloaded:    downloaded,
 		})

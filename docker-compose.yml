@@ -10,6 +10,9 @@ services:
       TORRENTS_STATES_FILE: /app/data/torrent_states.json
       TORRENTS_DIR: /app/data/torrents
       PIECE_COMPLETION_DIR: /app/data/torrent_data
+      SPEED_LIMITS_FILE: /app/data/speed_limits.json
+      DOWNLOAD_RATE_LIMIT_KIB: ${DOWNLOAD_RATE_LIMIT_KIB:-0}
+      UPLOAD_RATE_LIMIT_KIB: ${UPLOAD_RATE_LIMIT_KIB:-0}
       JWT_SECRET: ${JWT_SECRET}
       AUTH_USERNAME: ${AUTH_USERNAME}
       AUTH_PASSWORD: ${AUTH_PASSWORD}

@@ -1,6 +1,8 @@
 package torrent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -17,9 +19,16 @@ type Service struct {
 	hub           *StatusHub
 	maxConcurrent int
 
-	// seededStatuses feeds per-torrent stored metadata into the status merge.
-	// Held under its own mutex so the broadcaster can run without the client lock.
-	storedMu sync.Mutex
+	// Rechecks are serialized because hashing several large torrents in parallel
+	// turns a useful integrity check into avoidable disk contention.
+	recheckMu    sync.RWMutex
+	rechecks     map[string]*recheckJob
+	recheckSlots chan struct{}
+}
+
+type recheckJob struct {
+	err    string
+	cancel context.CancelFunc
 }
 
 // NewService creates a new torrent service.
@@ -32,6 +41,8 @@ func NewService(client *Client, sm *StateManager, hub *StatusHub, maxConcurrent 
 		state:         sm,
 		hub:           hub,
 		maxConcurrent: maxConcurrent,
+		rechecks:      make(map[string]*recheckJob),
+		recheckSlots:  make(chan struct{}, 1),
 	}
 }
 
@@ -92,6 +103,7 @@ func (s *Service) List() []TorrentStatus {
 			a.Size = orSize(a.Size, st.Size)
 			a.AddedAt = st.AddedAt
 			a.CompletedAt = st.CompletedAt
+			s.applyRecheckStatus(&a)
 			out = append(out, a)
 		} else {
 			// not active in client → reflect stored/paused state
@@ -103,7 +115,7 @@ func (s *Service) List() []TorrentStatus {
 				progress = 1
 				downloaded = st.Size
 			}
-			out = append(out, TorrentStatus{
+			item := TorrentStatus{
 				ID:          st.InfoHash,
 				InfoHash:    st.InfoHash,
 				Name:        st.Name,
@@ -113,7 +125,9 @@ func (s *Service) List() []TorrentStatus {
 				Downloaded:  downloaded,
 				AddedAt:     st.AddedAt,
 				CompletedAt: st.CompletedAt,
-			})
+			}
+			s.applyRecheckStatus(&item)
+			out = append(out, item)
 		}
 	}
 
@@ -146,6 +160,7 @@ func (s *Service) Get(infoHash string) (*TorrentStatus, error) {
 func (s *Service) Delete(infoHash string, deleteFiles bool) error {
 	st, ok := s.state.Get(infoHash)
 
+	s.cancelRecheck(infoHash)
 	// Fully drop the torrent from the client (not just pause).
 	s.client.dropTorrent(infoHash)
 	if deleteFiles && ok {
@@ -164,6 +179,16 @@ func (s *Service) StartSeeding(infoHash string) error {
 	}
 	if st.Magnet == "" {
 		return fmt.Errorf("no magnet link stored for torrent %s", infoHash)
+	}
+	// A running recheck owns the torrent's data flow. Record the desired state
+	// now and let runRecheck resume it after the last piece has been verified.
+	if recheckErr, exists := s.recheckState(infoHash); exists {
+		s.state.SetSeeding(infoHash, true)
+		if recheckErr != "" {
+			return s.enqueueRecheck(*st)
+		}
+		s.publish()
+		return nil
 	}
 	if _, err := s.client.StartSeeding(st.Magnet); err != nil {
 		s.state.SetSeeding(infoHash, false)
@@ -186,10 +211,33 @@ func (s *Service) StopSeeding(infoHash string) error {
 	return nil
 }
 
+// Recheck queues a full hash verification of a torrent's existing data, like
+// "Force Recheck" in qBittorrent.
+func (s *Service) Recheck(infoHash string) error {
+	st, ok := s.state.Get(infoHash)
+	if !ok {
+		return fmt.Errorf("torrent with infohash %s not found", infoHash)
+	}
+	if st.Magnet == "" {
+		return fmt.Errorf("no magnet link stored for torrent %s", infoHash)
+	}
+	return s.enqueueRecheck(*st)
+}
+
+// SpeedLimits returns global download and upload limits in bytes per second.
+func (s *Service) SpeedLimits() SpeedLimits {
+	return s.client.SpeedLimits()
+}
+
+// SetSpeedLimits applies and persists global download and upload limits.
+func (s *Service) SetSpeedLimits(limits SpeedLimits) error {
+	return s.client.SetSpeedLimits(limits)
+}
+
 // StartBackgroundWorkers runs the status broadcaster, the concurrent-download
 // scheduler, and the completion monitor. All stop on sigChan.
 func (s *Service) StartBackgroundWorkers(sigChan chan os.Signal) {
-	// Re-add persisted, user-seeding torrents on startup.
+	// Re-hash persisted torrents before trusting their completion state.
 	s.resumeOnStartup()
 
 	// Broadcaster: builds statuses every second, marks completions, pushes to SSE hub.
@@ -223,18 +271,128 @@ func (s *Service) StartBackgroundWorkers(sigChan chan os.Signal) {
 	}()
 }
 
-// resumeOnStartup re-adds every stored torrent the user wants to seed.
+// resumeOnStartup schedules every persisted torrent for a disk recheck. Active
+// torrents resume only after verification; user-paused torrents stay paused.
 func (s *Service) resumeOnStartup() {
 	for _, st := range s.state.All() {
-		if !st.Seeding || st.Magnet == "" {
+		if st.Magnet == "" {
+			log.Printf("Cannot recheck %s on startup: no magnet link stored", st.Name)
 			continue
 		}
-		go func(st storedTorrent) {
-			log.Printf("Resuming torrent on startup: %s", st.Name)
-			if _, err := s.client.StartSeeding(st.Magnet); err != nil {
-				log.Printf("Failed to resume torrent %s: %v", st.Name, err)
+		if err := s.enqueueRecheck(st); err != nil {
+			log.Printf("Failed to queue startup recheck for %s: %v", st.Name, err)
+		}
+	}
+}
+
+func (s *Service) enqueueRecheck(st storedTorrent) error {
+	s.recheckMu.Lock()
+	if job, ok := s.rechecks[st.InfoHash]; ok && job.err == "" {
+		s.recheckMu.Unlock()
+		return fmt.Errorf("torrent %s is already queued for recheck", st.InfoHash)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	job := &recheckJob{cancel: cancel}
+	s.rechecks[st.InfoHash] = job
+	s.recheckMu.Unlock()
+
+	s.publish()
+	go s.runRecheck(ctx, st, job)
+	return nil
+}
+
+func (s *Service) runRecheck(ctx context.Context, st storedTorrent, job *recheckJob) {
+	select {
+	case s.recheckSlots <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-s.recheckSlots }()
+
+	log.Printf("Rechecking torrent data: %s", st.Name)
+	err := s.client.recheck(ctx, st.InfoHash, st.Magnet)
+	if err == nil {
+		if status := s.statusOf(st.InfoHash); status != nil && status.Progress >= 1 {
+			s.state.MarkCompleted(st.InfoHash)
+		} else {
+			s.state.MarkIncomplete(st.InfoHash)
+		}
+
+		// Read the preference again: the user may have pressed Stop while the
+		// recheck was running.
+		if current, ok := s.state.Get(st.InfoHash); ok && current.Seeding {
+			if _, resumeErr := s.client.StartSeeding(current.Magnet); resumeErr != nil {
+				err = fmt.Errorf("resume after recheck: %w", resumeErr)
 			}
-		}(st)
+		}
+	}
+
+	s.recheckMu.Lock()
+	// The job may have been canceled and removed while waiting for disk access.
+	if current := s.rechecks[st.InfoHash]; current != job {
+		s.recheckMu.Unlock()
+		return
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		job.err = err.Error()
+		job.cancel = nil
+	} else {
+		delete(s.rechecks, st.InfoHash)
+	}
+	s.recheckMu.Unlock()
+
+	if err != nil {
+		log.Printf("Failed to recheck torrent %s: %v", st.Name, err)
+	} else {
+		log.Printf("Finished rechecking torrent data: %s", st.Name)
+	}
+	s.publish()
+}
+
+func (s *Service) applyRecheckStatus(status *TorrentStatus) {
+	s.recheckMu.RLock()
+	job, ok := s.rechecks[status.InfoHash]
+	var recheckErr string
+	if ok {
+		recheckErr = job.err
+	}
+	s.recheckMu.RUnlock()
+	if !ok {
+		return
+	}
+	if recheckErr != "" {
+		status.Status = StatusError
+		status.Error = "recheck failed: " + recheckErr
+		return
+	}
+	status.Status = StatusChecking
+	status.DownloadSpeed = 0
+	status.UploadSpeed = 0
+	status.Eta = 0
+}
+
+func (s *Service) recheckState(infoHash string) (string, bool) {
+	s.recheckMu.RLock()
+	job, ok := s.rechecks[infoHash]
+	var recheckErr string
+	if ok {
+		recheckErr = job.err
+	}
+	s.recheckMu.RUnlock()
+	return recheckErr, ok
+}
+
+func (s *Service) cancelRecheck(infoHash string) {
+	s.recheckMu.Lock()
+	job, ok := s.rechecks[infoHash]
+	var cancel context.CancelFunc
+	if ok {
+		cancel = job.cancel
+		delete(s.rechecks, infoHash)
+	}
+	s.recheckMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 

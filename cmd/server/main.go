@@ -32,6 +32,8 @@ func main() {
 	log.Printf("  TorrentsStatesFile: %s", cfg.TorrentsStatesFile)
 	log.Printf("  TorrentsDir: %s", cfg.TorrentsDir)
 	log.Printf("  PieceCompletionDir: %s", cfg.PieceCompletionDir)
+	log.Printf("  SpeedLimitsFile: %s", cfg.SpeedLimitsFile)
+	log.Printf("  Initial rate limits: download=%d B/s upload=%d B/s", cfg.DownloadLimit, cfg.UploadLimit)
 	log.Printf("  MaxConcurrentDownloads: %d", cfg.MaxConcurrentDownloads)
 	log.Printf("  Auth user: %s", cfg.AuthUsername)
 	if cfg.JellyfinURL == "" {
@@ -47,7 +49,12 @@ func main() {
 	}
 
 	// Torrent client
-	torrentClient, err := torrent.NewClient(cfg.TorrentsDir, cfg.PieceCompletionDir)
+	torrentClient, err := torrent.NewClient(
+		cfg.TorrentsDir,
+		cfg.PieceCompletionDir,
+		cfg.SpeedLimitsFile,
+		torrent.SpeedLimits{Download: cfg.DownloadLimit, Upload: cfg.UploadLimit},
+	)
 	if err != nil {
 		log.Fatal("Failed to init torrent client:", err)
 	}

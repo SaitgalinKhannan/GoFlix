@@ -49,6 +49,51 @@ When a torrent finishes downloading, `torrent-service` calls
 4. **Open the UI** at `http://<server>:8080` (set `FRONTEND_PORT` to change it), sign in with your `AUTH_USERNAME`/`AUTH_PASSWORD`, and paste a magnet link or drop a `.torrent` file.
 5. **Point Jellyfin at the media** (first run only): open Jellyfin at `http://<server>:8096`, finish setup, and add a **Media Library** with the folder `/data/torrents` — that's where downloads land (the `goflix-data` volume, mounted read-only).
 
+## Desktop shell (Tauri)
+
+`desktop/` contains the lightweight native shell for Linux desktops. It uses the
+system WebView rather than Electron and expects Docker Compose to be installed.
+The embedded UI talks directly to the published `torrent-service` port, so it
+does not need the nginx frontend container.
+
+On launch, the desktop app starts only `torrent-service`. Jellyfin is controlled
+from the **Desktop services** panel in the UI:
+
+- **Start Jellyfin** creates/starts its Compose container;
+- **Stop Jellyfin** stops the container without removing its config or cache;
+- **Restart** restarts it, and **Open** opens the configured local Jellyfin URL.
+
+**Choose folder** opens the native folder picker, writes an absolute `DATA_DIR`
+to the project `.env`, creates its required subfolders, and recreates the backend
+container. The Jellyfin container is also recreated so `/data` points at the new
+folder; the named `jellyfin-config` and `jellyfin-cache` volumes are preserved.
+
+Changing `DATA_DIR` does not move existing downloads. Move them manually before
+switching folders if they must remain available to Jellyfin.
+
+For development:
+
+```bash
+cd desktop
+npm install
+npm run dev
+```
+
+For a release build:
+
+```bash
+cd desktop
+npm run build
+```
+
+The personal desktop build remembers the absolute checkout path it was built
+from, so the installed `.deb` can find `docker-compose.yml`. If the checkout is
+moved later, launch it with the new absolute project path:
+
+```bash
+GOFLIX_PROJECT_DIR=/absolute/path/to/GoFlix goflix-desktop
+```
+
 ## Exposing the UI over the internet (Cloudflare Tunnel)
 
 The `frontend` container (nginx) is the single entrypoint: it serves the UI and
@@ -84,8 +129,11 @@ All config is environment-driven (see `.env.example`):
 | `PORT`                    | `8081`                           | torrent-service listen port                             |
 | `DATA_DIR`                | `./data`                         | Host folder bind-mounted into the containers (downloads + state). Use an absolute path. |
 | `TORRENTS_DIR`            | `/app/data/torrents`            | Where downloaded media is written (inside the container) |
-| `PIECE_COMPLETION_DIR`    | `/app/data/torrent_data`        | anacrolix piece-completion store                         |
+| `PIECE_COMPLETION_DIR`    | `/app/data/torrent_data`        | Legacy setting (completion is rebuilt by startup recheck) |
 | `TORRENTS_STATES_FILE`    | `/app/data/torrent_states.json` | Persisted torrent list (for resume after restart)        |
+| `SPEED_LIMITS_FILE`       | `/app/data/speed_limits.json`   | Persisted global download/upload limits                  |
+| `DOWNLOAD_RATE_LIMIT_KIB` | `0`                              | Initial global download limit in KiB/s (`0` = unlimited) |
+| `UPLOAD_RATE_LIMIT_KIB`   | `0`                              | Initial global upload limit in KiB/s (`0` = unlimited)   |
 | `JWT_SECRET`              | _(required)_                     | Secret signing JWTs (`openssl rand -hex 32`)             |
 | `AUTH_USERNAME`           | _(required)_                     | Username for the UI login                                |
 | `AUTH_PASSWORD`           | _(required)_                     | Password for the UI login (hashed at startup)            |
@@ -109,6 +157,9 @@ GET    /api/v1/torrents/{id}         → 200 TorrentStatus (with files[])
 DELETE /api/v1/torrents/{id}         ?deleteFiles=true → 204
 POST   /api/v1/torrents/{id}/start   → 200   (resume downloading/seeding)
 POST   /api/v1/torrents/{id}/stop    → 200   (stop, files preserved)
+POST   /api/v1/torrents/{id}/recheck → 202   (queue full piece hash verification)
+GET    /api/v1/settings/speed-limits  → 200   ({ download, upload } bytes/s)
+PUT    /api/v1/settings/speed-limits  → 200   (update and persist global limits)
 GET    /api/v1/events                Server-Sent Events: live TorrentStatus[] stream
 ```
 
@@ -133,6 +184,8 @@ type TorrentStatus = {
   progress: number;        // 0..1
   downloadSpeed: number;   // bytes/s
   uploadSpeed: number;     // bytes/s
+  seeders: number;         // currently connected peers with all pieces
+  leechers: number;        // currently connected peers still downloading
   size: number;            // bytes
   downloaded: number;      // bytes
   addedAt: string;         // ISO 8601

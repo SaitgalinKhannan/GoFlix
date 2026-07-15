@@ -15,6 +15,9 @@ type Config struct {
 	TorrentsStatesFile string
 	TorrentsDir        string
 	PieceCompletionDir string
+	SpeedLimitsFile    string
+	DownloadLimit      int64 // bytes/s, 0 means unlimited
+	UploadLimit        int64 // bytes/s, 0 means unlimited
 	// Auth (JWT access/refresh)
 	JWTSecret              string
 	AuthUsername           string
@@ -35,6 +38,9 @@ func LoadConfig() (*Config, error) {
 		TorrentsStatesFile:     os.Getenv("TORRENTS_STATES_FILE"),
 		TorrentsDir:            os.Getenv("TORRENTS_DIR"),
 		PieceCompletionDir:     os.Getenv("PIECE_COMPLETION_DIR"),
+		SpeedLimitsFile:        os.Getenv("SPEED_LIMITS_FILE"),
+		DownloadLimit:          envKiBRate("DOWNLOAD_RATE_LIMIT_KIB"),
+		UploadLimit:            envKiBRate("UPLOAD_RATE_LIMIT_KIB"),
 		JWTSecret:              os.Getenv("JWT_SECRET"),
 		AuthUsername:           os.Getenv("AUTH_USERNAME"),
 		AuthPassword:           os.Getenv("AUTH_PASSWORD"),
@@ -55,6 +61,9 @@ func LoadConfig() (*Config, error) {
 	if cfg.PieceCompletionDir == "" {
 		cfg.PieceCompletionDir = "/app/data/torrent_data"
 	}
+	if cfg.SpeedLimitsFile == "" {
+		cfg.SpeedLimitsFile = "/app/data/speed_limits.json"
+	}
 	if cfg.MaxConcurrentDownloads < 1 {
 		cfg.MaxConcurrentDownloads = 1
 	}
@@ -68,6 +77,18 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func envKiBRate(key string) int64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 || n > (1<<63-1)/1024 {
+		return 0
+	}
+	return n * 1024
 }
 
 func envInt(key string, def int) int {
