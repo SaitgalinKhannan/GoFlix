@@ -14,7 +14,7 @@ import LoginGate from "@/components/LoginGate";
 import AddTorrentForm from "@/components/AddTorrentForm";
 import TorrentCard from "@/components/TorrentCard";
 import SpeedLimitControl from "@/components/SpeedLimitControl";
-import DesktopDataDirectory from "@/components/DesktopDataDirectory";
+import DesktopSettings from "@/components/DesktopSettings";
 import { clearTokens } from "@/lib/api";
 import { formatSpeed } from "@/lib/format";
 import { useTorrents } from "@/lib/useTorrents";
@@ -78,6 +78,7 @@ export default function Home() {
               <span className="text-xs text-slate-400">{connected ? "Live sync" : "Polling"}</span>
             </div>
             <SpeedLimitControl />
+            <DesktopSettings />
             <button onClick={logout} className="icon-button" title="Sign out" aria-label="Sign out">
               <LogOut className="h-4 w-4" />
             </button>
@@ -91,8 +92,6 @@ export default function Home() {
           <Stat icon={Download} label="Down speed" value={formatSpeed(stats.speed)} />
           <Stat icon={ArrowUpFromLine} label="Up speed" value={formatSpeed(stats.uploadSpeed)} className="col-span-2 sm:col-span-1" />
         </section>
-
-        <DesktopDataDirectory />
 
         <AddTorrentForm onAdded={refresh} />
 

@@ -52,9 +52,21 @@ When a torrent finishes downloading, `torrent-service` calls
 ## Desktop shell (Tauri)
 
 `desktop/` contains the lightweight native shell for Linux desktops. It uses the
-system WebView rather than Electron. In the desktop app, **Choose folder** opens
-the native folder picker, writes an absolute `DATA_DIR` to the project `.env`,
-creates its required subfolders, and restarts `docker compose`.
+system WebView rather than Electron and expects Docker Compose to be installed.
+The embedded UI talks directly to the published `torrent-service` port, so it
+does not need the nginx frontend container.
+
+On launch, the desktop app starts only `torrent-service`. Jellyfin is controlled
+from the **Desktop services** panel in the UI:
+
+- **Start Jellyfin** creates/starts its Compose container;
+- **Stop Jellyfin** stops the container without removing its config or cache;
+- **Restart** restarts it, and **Open** opens the configured local Jellyfin URL.
+
+**Choose folder** opens the native folder picker, writes an absolute `DATA_DIR`
+to the project `.env`, creates its required subfolders, and recreates the backend
+container. The Jellyfin container is also recreated so `/data` points at the new
+folder; the named `jellyfin-config` and `jellyfin-cache` volumes are preserved.
 
 Changing `DATA_DIR` does not move existing downloads. Move them manually before
 switching folders if they must remain available to Jellyfin.
@@ -65,6 +77,21 @@ For development:
 cd desktop
 npm install
 npm run dev
+```
+
+For a release build:
+
+```bash
+cd desktop
+npm run build
+```
+
+The personal desktop build remembers the absolute checkout path it was built
+from, so the installed `.deb` can find `docker-compose.yml`. If the checkout is
+moved later, launch it with the new absolute project path:
+
+```bash
+GOFLIX_PROJECT_DIR=/absolute/path/to/GoFlix goflix-desktop
 ```
 
 ## Exposing the UI over the internet (Cloudflare Tunnel)

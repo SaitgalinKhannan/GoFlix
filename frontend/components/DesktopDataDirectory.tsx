@@ -2,24 +2,9 @@
 
 import { FolderCog, FolderOpen, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-
-declare global {
-  interface Window {
-    __TAURI__?: {
-      core?: {
-        invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
-      };
-    };
-  }
-}
+import { desktopInvoke, isDesktop } from "@/lib/desktop";
 
 type DataDirectory = { path: string; projectDir: string };
-
-function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-  const nativeInvoke = window.__TAURI__?.core?.invoke;
-  if (!nativeInvoke) return Promise.reject(new Error("Desktop API is unavailable"));
-  return nativeInvoke<T>(command, args);
-}
 
 export default function DesktopDataDirectory() {
   const [directory, setDirectory] = useState<DataDirectory | null>(null);
@@ -28,9 +13,9 @@ export default function DesktopDataDirectory() {
   const [available, setAvailable] = useState(false);
 
   useEffect(() => {
-    if (!window.__TAURI__?.core?.invoke) return;
+    if (!isDesktop()) return;
     setAvailable(true);
-    void invoke<DataDirectory>("get_data_dir")
+    void desktopInvoke<DataDirectory>("get_data_dir")
       .then(setDirectory)
       .catch((error) => setMessage(error instanceof Error ? error.message : "Could not read DATA_DIR"));
   }, []);
@@ -39,15 +24,14 @@ export default function DesktopDataDirectory() {
     setMessage(null);
     setBusy(true);
     try {
-      const selected = await invoke<string | null>("pick_data_dir", { current: directory?.path });
+      const selected = await desktopInvoke<string | null>("pick_data_dir", { current: directory?.path });
       if (!selected) return;
       if (!window.confirm("GoFlix will restart its containers. Existing downloads are not moved to the new folder. Continue?")) {
         return;
       }
-      const saved = await invoke<DataDirectory>("save_data_dir", { path: selected });
-      await invoke<void>("restart_compose");
+      const saved = await desktopInvoke<DataDirectory>("save_data_dir", { path: selected });
       setDirectory(saved);
-      setMessage("Download folder updated and containers restarted.");
+      setMessage("Download folder updated. GoFlix services now use the new path.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not update DATA_DIR");
     } finally {

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
-import { API_BASE, getAccessToken, listTorrents, refresh as refreshTokens } from "./api";
+import { getApiBase, getAccessToken, listTorrents, refresh as refreshTokens } from "./api";
 import type { TorrentStatus } from "./types";
 
 /**
@@ -46,7 +46,7 @@ export function useTorrents(enabled: boolean, onAuthError?: () => void) {
 
     refreshFn.current();
 
-    fetchEventSource(`${API_BASE}/api/v1/events`, {
+    fetchEventSource(`${getApiBase()}/api/v1/events`, {
       method: "GET",
       signal: ctrl.signal,
       openWhenHidden: true,
